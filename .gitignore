@@ -1,0 +1,18 @@
+# 本地凭证（明文 PAT / Secret 等）—— 绝不进入 git / GitHub
+TRAE_LOCAL/
+
+# 本地草稿区（不推送）
+pages/
+drafts/
+
+# Python 常见产物
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node 依赖（如涉及前端）
+node_modules/
+
+# macOS
+.DS_Store
