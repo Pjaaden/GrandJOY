@@ -24,7 +24,9 @@
 
 ## 飞书 CLI 使用要点（踩过的坑）
 - `+cells-set --cells` 空位必须用 `{}`，不能用 `{"value": null}` —— 否则 schema 校验失败且静默返回空
-- `+cells-batch-clear --ranges` 用子表**显示名**（`Sheet名!A1:H200`），不接受 `--sheet-id`
+- `+cells-batch-clear --ranges` 用子表**显示名**（`Sheet名!A1:H200`），不接受 `--sheet-id`；目标子表不存在会整体失败
 - 覆盖刷新前先清空目标区域，避免行数变少残留旧行
+- **清空只清内容不清格式**：列数变化时旧列残留日期格式会让新写入的整数显示成 1900-01-01 → 写入时必须**逐列显式声明 number_format**
 - 表格数据写入用 `+table-put --sheets` typed 协议保类型（日期/金额/百分比）
+- 条件格式用 `+cond-format-create --rule-type expression --ranges '["A2:P500"]' --properties '{"style":{"back_color":"#FFE3E3"},"attrs":[{"formula":["=$A2=\"🔴 90天内到期\""]}]}'`
 

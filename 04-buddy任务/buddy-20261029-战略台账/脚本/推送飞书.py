@@ -37,6 +37,7 @@ TYPED_SHEETS = [s for s in SHEET_SPECS if s != "版本记录"]
 CLEAR_RANGES = {
     "合同台账明细": "A1:AZ3000",
     "合同级汇总": "A1:AZ1000",
+    "到期预警": "A1:AZ500",
     "区域业态汇总": "A1:AZ500",
     "品牌汇总": "A1:AZ500",
     "字段说明": "A1:AZ200",
@@ -81,11 +82,17 @@ def to_typed(name: str, rows: list[dict]) -> dict:
     return item
 
 
-def build_styles(name: str, spec: dict) -> dict:
-    """为每个子表生成配套样式：表头、冻结、列宽。"""
+def build_styles(name: str, spec: dict, n_rows: int) -> dict:
+    """为每个子表生成配套样式：表头、冻结、列宽、每列数字格式。
+
+    注意：必须为每个数据列显式声明 number_format。
+    原因：清空只清内容不清格式，旧列残留的日期格式会让新写入的整数
+    显示成 1900-01-01（列数变化时尤其明显）。
+    """
     headers = spec["headers"]
-    last_col = chr(ord("A") + len(headers) - 1) if len(headers) <= 26 else "A"
-    # 计算列字母
+    dtypes = spec.get("dtypes", {})
+    formats = spec.get("formats", {})
+
     def col_letter(n: int) -> str:
         s = ""
         while n > 0:
@@ -94,6 +101,7 @@ def build_styles(name: str, spec: dict) -> dict:
         return s
 
     end = col_letter(len(headers))
+    last_row = max(n_rows + 1, 2)
     styles = {
         "name": name,
         "cell_styles": [
@@ -113,12 +121,33 @@ def build_styles(name: str, spec: dict) -> dict:
         "col_sizes": [],
         "freeze": {"rows": 1, "cols": 0},
     }
+
+    # 每列显式数字格式 + 对齐
+    for i, h in enumerate(headers, start=1):
+        cl = col_letter(i)
+        dt_name = dtypes.get(h, "object")
+        cell_style = {}
+        if h in DATE_COLS or dt_name.startswith("datetime"):
+            cell_style["number_format"] = formats.get(h, "yyyy-mm-dd")
+            cell_style["horizontal_alignment"] = "center"
+        elif dt_name.startswith("int"):
+            cell_style["number_format"] = formats.get(h, "0")
+            cell_style["horizontal_alignment"] = "right"
+        elif dt_name.startswith("float"):
+            cell_style["number_format"] = formats.get(h, "#,##0.00")
+            cell_style["horizontal_alignment"] = "right"
+        else:
+            cell_style["number_format"] = formats.get(h, "@")
+            cell_style["horizontal_alignment"] = "left"
+        styles["cell_styles"].append({"range": f"{cl}2:{cl}{last_row}", **cell_style})
+
+    # 列宽
     for i, h in enumerate(headers, start=1):
         width = 120
         if h in ("合同名称", "商户名称", "备注", "口径与计算规则", "源表来源列", "字段名称", "项目名称"):
             width = 240
-        elif h in ("数据校验", "涉及三级业态", "所属区域", "品牌/行业"):
-            width = 160
+        elif h in ("数据校验", "涉及三级业态", "所属区域", "品牌/行业", "到期预警", "预警分级"):
+            width = 170
         elif "(元)" in h:
             width = 160
         styles["col_sizes"].append({"range": f"{col_letter(i)}:{col_letter(i)}", "type": "pixel", "size": width})
@@ -159,7 +188,7 @@ def main():
     _, meta = load_source(args.源文件)
 
     sheets_payload = {"sheets": [to_typed(n, data[n]) for n in TYPED_SHEETS]}
-    styles_payload = {"styles": [build_styles(n, SHEET_SPECS[n]) for n in TYPED_SHEETS]}
+    styles_payload = {"styles": [build_styles(n, SHEET_SPECS[n], len(data[n])) for n in TYPED_SHEETS]}
 
     out_dir = args.载荷目录 or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "产出", "_载荷")
     os.makedirs(out_dir, exist_ok=True)

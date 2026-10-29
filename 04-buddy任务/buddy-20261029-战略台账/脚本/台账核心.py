@@ -76,6 +76,7 @@ CONTRACT_HEADERS = [
     "合同名称",
     "项目名称",
     "所属区域",
+    "楼层",
     "资源位编号",
     "品牌/行业",
     "商户名称",
@@ -86,10 +87,32 @@ CONTRACT_HEADERS = [
     "合同起租日",
     "合同到期日",
     "合同总天数",
+    "距到期天数",
+    "到期预警",
     "期间固定租金总额(元)",
     "期间物业费总额(元)",
     "期间推广费总额(元)",
     "期间成本合计(元)",
+]
+
+# 到期预警表头（招商跟进用，基准日可调）
+ALERT_HEADERS = [
+    "预警分级",
+    "合同编号",
+    "品牌/行业",
+    "项目名称",
+    "所属区域",
+    "楼层",
+    "资源位编号",
+    "商户名称",
+    "合同状态",
+    "签约面积(平方米)",
+    "三级业态",
+    "合同起租日",
+    "合同到期日",
+    "距到期天数",
+    "期间成本合计(元)",
+    "期间固定租金总额(元)",
 ]
 
 # 区域 × 业态 汇总表头
@@ -325,10 +348,28 @@ def build_contract(detail: list[dict], src: list[dict]) -> list[dict]:
     for row in detail:
         groups[row["合同编号"] or "(缺失合同编号)"].append(row)
 
+    today = dt.date.today()
+
+    def _alert(days: int | None) -> str:
+        if days is None:
+            return "无到期日"
+        if days < 0:
+            return "已到期"
+        if days <= 90:
+            return "🔴 90天内到期"
+        if days <= 180:
+            return "🟠 半年内到期"
+        if days <= 365:
+            return "🟡 一年内到期"
+        if days <= 730:
+            return "🟢 1-2年到期"
+        return "⚪ 2年以上"
+
     out = []
     for cid, rows in groups.items():
         first = rows[0]
         areas = [r["签约面积"] for r in rows if r["签约面积"] is not None]
+        floors = sorted({r["楼层"] for r in rows if r["楼层"]})
         span = contract_span.get(cid, (None, None))
         if span[0] is None or span[1] is None:
             dates = [(_date(r["起租日"]), _date(r["到期日"])) for r in rows]
@@ -337,6 +378,7 @@ def build_contract(detail: list[dict], src: list[dict]) -> list[dict]:
                 max([d[1] for d in dates if d[1]], default=None),
             )
         total_days = (span[1] - span[0]).days + 1 if span[0] and span[1] else None
+        left_days = (span[1] - today).days if span[1] else None
 
         def ssum(key: str) -> float:
             return round(sum(r[key] or 0 for r in rows), 2)
@@ -351,6 +393,7 @@ def build_contract(detail: list[dict], src: list[dict]) -> list[dict]:
                 "合同名称": first["合同名称"],
                 "项目名称": first["项目名称"],
                 "所属区域": first["所属区域"],
+                "楼层": "、".join(floors),
                 "资源位编号": first["资源位编号"],
                 "品牌/行业": first["品牌/行业"],
                 "商户名称": first["商户名称"],
@@ -361,6 +404,8 @@ def build_contract(detail: list[dict], src: list[dict]) -> list[dict]:
                 "合同起租日": span[0].isoformat() if span[0] else None,
                 "合同到期日": span[1].isoformat() if span[1] else None,
                 "合同总天数": total_days,
+                "距到期天数": left_days,
+                "到期预警": _alert(left_days),
                 "期间固定租金总额(元)": rent_sum,
                 "期间物业费总额(元)": pf_sum,
                 "期间推广费总额(元)": promo_sum,
@@ -369,6 +414,35 @@ def build_contract(detail: list[dict], src: list[dict]) -> list[dict]:
         )
 
     out.sort(key=lambda x: (x["所属区域"] or "", x["项目名称"] or "", x["品牌/行业"] or "", x["合同编号"] or ""))
+    return out
+
+
+# ── 到期预警 ────────────────────────────────────────────────────────────────
+def build_alert(contract: list[dict]) -> list[dict]:
+    """提取未来 12 个月内到期的合同，按紧急程度排序。"""
+    soon = [x for x in contract if x["距到期天数"] is not None and 0 <= x["距到期天数"] <= 365]
+    order = {"🔴 90天内到期": 0, "🟠 半年内到期": 1, "🟡 一年内到期": 2}
+    soon.sort(key=lambda x: (order.get(x["到期预警"], 9), x["距到期天数"]))
+    out = []
+    for x in soon:
+        out.append({
+            "预警分级": x["到期预警"],
+            "合同编号": x["合同编号"],
+            "品牌/行业": x["品牌/行业"],
+            "项目名称": x["项目名称"],
+            "所属区域": x["所属区域"],
+            "楼层": x["楼层"],
+            "资源位编号": x["资源位编号"],
+            "商户名称": x["商户名称"],
+            "合同状态": x["合同状态"],
+            "签约面积(平方米)": x["签约面积(平方米)"],
+            "三级业态": x["三级业态"],
+            "合同起租日": x["合同起租日"],
+            "合同到期日": x["合同到期日"],
+            "距到期天数": x["距到期天数"],
+            "期间成本合计(元)": x["期间成本合计(元)"],
+            "期间固定租金总额(元)": x["期间固定租金总额(元)"],
+        })
     return out
 
 
@@ -487,6 +561,9 @@ def build_spec() -> list[dict]:
         ("三级业态", "三级业态", "原样取自 BI", "运动装、鞋类、男装、户外用品、服饰集合店等"),
         ("合同编号", "合同编号", "原样取自 BI", "合同级汇总主键"),
         ("合同名称", "合同名称", "原样取自 BI", ""),
+        ("楼层", "楼层", "取自明细表，同合同内去重合并", "一合同多楼层时以、分隔"),
+        ("到期预警", "派生", "按距到期天数自动分级", "🔴90天内 / 🟠半年内 / 🟡一年内 / 🟢1-2年 / ⚪2年以上"),
+        ("距到期天数", "派生", "合同到期日 − 今天", "负数表示已过期"),
         ("是否战略品牌", "是否战略品牌", "BI「是否战略品牌」1→是，0→否", ""),
         ("缴付租金方法", "繳付租金方法", "原样取自 BI", "固租 / 抽成 / 两者取高"),
         ("日租金计算方式", "日租金计算方式", "原样取自 BI", "日面积 / 月面积"),
@@ -528,12 +605,14 @@ def build_all(path: str, note: str = "") -> dict[str, list[dict]]:
     contract = build_contract(detail, src)
     region = build_region(contract, detail)
     brand = build_brand(contract, detail)
+    alert = build_alert(contract)
     spec = build_spec()
     version = build_version(meta, detail, contract, note)
 
     return {
         "合同台账明细": detail,
         "合同级汇总": contract,
+        "到期预警": alert,
         "区域业态汇总": region,
         "品牌汇总": brand,
         "字段说明": spec,
@@ -563,12 +642,24 @@ SHEET_SPECS: dict[str, dict] = {
         "headers": CONTRACT_HEADERS,
         "dtypes": {
             "签约面积(平方米)": "float64", "期次数": "int64", "合同总天数": "int64",
+            "距到期天数": "int64",
             "期间固定租金总额(元)": "float64", "期间物业费总额(元)": "float64",
             "期间推广费总额(元)": "float64", "期间成本合计(元)": "float64",
         },
         "formats": {
             "签约面积(平方米)": "#,##0.00", "期间固定租金总额(元)": "#,##0.00",
             "期间物业费总额(元)": "#,##0.00", "期间推广费总额(元)": "#,##0.00", "期间成本合计(元)": "#,##0.00",
+        },
+    },
+    "到期预警": {
+        "headers": ALERT_HEADERS,
+        "dtypes": {
+            "签约面积(平方米)": "float64", "距到期天数": "int64",
+            "期间成本合计(元)": "float64", "期间固定租金总额(元)": "float64",
+        },
+        "formats": {
+            "签约面积(平方米)": "#,##0.00", "期间成本合计(元)": "#,##0.00",
+            "期间固定租金总额(元)": "#,##0.00",
         },
     },
     "区域业态汇总": {

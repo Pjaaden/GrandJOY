@@ -168,16 +168,41 @@ def main():
             {"value": rate, "cell_styles": {"number_format": "0.00%", "horizontal_alignment": "right"} if rate is not None else {}})
 
     cells.append(blank(6))
-    row({"value": "三、使用与更新说明",
+    row({"value": "三、到期预警（未来 12 个月内到期合同 Top15）",
+         "cell_styles": {"font_size": 12, "font_weight": "bold", "font_color": "#1F3864",
+                         "horizontal_alignment": "left"}})
+    row(*[{"value": h, "cell_styles": {"font_weight": "bold", "background_color": "#E8EEF7",
+                                       "horizontal_alignment": "center",
+                                       "border_styles": {"bottom": {"style": "solid", "weight": "thin", "color": "#D6DCE4"}}}}
+             for h in ["预警分级", "品牌/行业", "项目名称", "合同到期日", "距到期天数", "签约面积（㎡）"]])
+    alert = data.get("到期预警", [])
+    for a in alert[:15]:
+        lvl = a["预警分级"]
+        back = {"🔴 90天内到期": "#FFE3E3", "🟠 半年内到期": "#FFF3E0", "🟡 一年内到期": "#FFFCE6"}.get(lvl)
+        fore = {"🔴 90天内到期": "#B42318", "🟠 半年内到期": "#B54708", "🟡 一年内到期": "#A16207"}.get(lvl)
+        st = {"horizontal_alignment": "left"}
+        if back:
+            st.update({"background_color": back, "font_color": fore})
+        row({"value": lvl, "cell_styles": st},
+            {"value": a["品牌/行业"], "cell_styles": {"horizontal_alignment": "left"}},
+            {"value": a["项目名称"], "cell_styles": {"horizontal_alignment": "left"}},
+            {"value": a["合同到期日"], "cell_styles": {"horizontal_alignment": "center"}},
+            {"value": a["距到期天数"], "cell_styles": {"number_format": "#,##0", "horizontal_alignment": "right"}},
+            {"value": a["签约面积(平方米)"], "cell_styles": {"number_format": "#,##0.00", "horizontal_alignment": "right"}})
+
+    cells.append(blank(6))
+    row({"value": "四、使用与更新说明",
          "cell_styles": {"font_size": 12, "font_weight": "bold", "font_color": "#1F3864",
                          "horizontal_alignment": "left"}})
     notes = [
         "1. 明细粒度 = 合同期次（合同期间：1=第一期，2=第二期……）。起租日/到期日为该期次边界，非整份合同边界。",
-        "2. 面积类指标看「合同级汇总」「区域业态汇总」，避免期次重复计数；「合同台账明细」为期次级。",
-        "3. 「数据校验」列：一致 / 口径差异·两者取高 / 免租期超期·负值 / 抽成制·BI无固定租金 / 口径差异。",
-        "4. 抽成扣率以小数存储（0.16 = 16%）可直接计算；抽成制合同无固定租金，日租金与固定租金总额为空属正常。",
-        "5. 更新方式：新版 BI 导出放入 源数据/ 目录 → 运行 脚本/更新台账.sh → 本地 xlsx 重生成并覆盖回写飞书本表。",
-        "6. 飞书位置：我的空间 / 大悦商业 / 战略台账 / 本表。",
+        "2. 面积类指标看「合同级汇总」「区域业态汇总」「到期预警」，避免期次重复计数；「合同台账明细」为期次级。",
+        "3. 「到期预警」子表已按红/橙/黄三级条件格式上色：90天内、半年内、一年内，可直接按预警分级排序跟进。",
+        "4. 「数据校验」列：一致 / 口径差异·两者取高 / 免租期超期·负值 / 抽成制·BI无固定租金 / 口径差异。",
+        "5. 抽成扣率以小数存储（0.16 = 16%）可直接计算；抽成制合同无固定租金，日租金与固定租金总额为空属正常。",
+        "6. 更新方式：新版 BI 导出放入 源数据/ 目录 → 运行 脚本/更新台账.sh → 本地 xlsx 重生成并覆盖回写飞书本表。",
+        "7. 本地查询工具：python 脚本/查台账.py 到期 --品牌 安踏 --月数 12（支持品牌/商户/项目/区域维度）。",
+        "8. 飞书位置：我的空间 / 大悦商业 / 战略台账 / 本表。",
     ]
     for n in notes:
         row({"value": n, "cell_styles": {"font_size": 10, "font_color": "#333333", "horizontal_alignment": "left"}})

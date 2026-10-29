@@ -57,10 +57,15 @@ echo "[2/3] 刷新飞书表..."
 
 # 4. 重建看板
 echo ""
-echo "[3/3] 重建台账看板..."
+echo "[3/4] 重建台账看板..."
 "$PY" "$SCRIPT_DIR/加看板.py" --表格token "$SHEET_TOKEN" --源文件 "$SRC" || exit 1
 
-# 5. 追加版本记录
+# 5. 条件格式 + 子表顺序
+echo ""
+echo "[4/4] 配置条件格式与子表顺序..."
+"$PY" "$SCRIPT_DIR/加条件格式.py" --表格token "$SHEET_TOKEN" || echo "  (条件格式配置失败，可手工重跑)"
+
+# 6. 追加版本记录
 echo ""
 echo "[追加] 版本记录..."
 "$PY" "$SCRIPT_DIR/追加版本记录.py" --表格token "$SHEET_TOKEN" --源文件 "$SRC" || echo "  (版本记录追加失败，可手工补)"
