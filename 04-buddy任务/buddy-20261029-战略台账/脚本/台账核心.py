@@ -83,6 +83,7 @@ CONTRACT_HEADERS = [
     "合同状态",
     "签约面积(平方米)",
     "三级业态",
+    "是否战略品牌",
     "期次数",
     "合同起租日",
     "合同到期日",
@@ -128,10 +129,12 @@ SLOT_HEADERS = [
     "当前签约面积(平方米)",
     "所属区域",
     "三级业态",
+    "是否战略品牌",
     "合同份数",
     "分段合同明细",
     "是否已换品牌",
     "最终到期日",
+    "最终到期年份",
     "距最终到期天数",
     "续约优先级",
     "当前单位日租金(元/平方米/日)",
@@ -383,6 +386,11 @@ def build_contract(detail: list[dict], src: list[dict]) -> list[dict]:
 
     today = dt.date.today()
 
+    # 战略品牌标识（源表字段在明细层，合同级需从期次带上来）
+    strat_map: dict[str, str] = {}
+    for row in detail:
+        strat_map.setdefault(row["合同编号"] or "(缺失合同编号)", row["是否战略品牌"])
+
     def _alert(days: int | None) -> str:
         if days is None:
             return "无到期日"
@@ -433,6 +441,7 @@ def build_contract(detail: list[dict], src: list[dict]) -> list[dict]:
                 "合同状态": first["合同状态"],
                 "签约面积(平方米)": _round(max(areas) if areas else None),
                 "三级业态": first["三级业态"],
+                "是否战略品牌": strat_map.get(cid, ""),
                 "期次数": len(rows),
                 "合同起租日": span[0].isoformat() if span[0] else None,
                 "合同到期日": span[1].isoformat() if span[1] else None,
@@ -566,10 +575,12 @@ def build_slot_expiry(contract: list[dict], detail: list[dict],
             "当前签约面积(平方米)": live_c["签约面积(平方米)"],
             "所属区域": live_c["所属区域"],
             "三级业态": live_c["三级业态"],
+            "是否战略品牌": live_c.get("是否战略品牌", ""),
             "合同份数": len(cons),
             "分段合同明细": seg_text,
             "是否已换品牌": "是" if changed else "否",
             "最终到期日": final.isoformat(),
+            "最终到期年份": final.year,
             "距最终到期天数": days_left,
             "续约优先级": priority,
             "当前单位日租金(元/平方米/日)": rent,
@@ -835,8 +846,7 @@ SHEET_SPECS: dict[str, dict] = {
             "签约面积(平方米)": "#,##0.00", "期间固定租金总额(元)": "#,##0.00",
             "期间物业费总额(元)": "#,##0.00", "期间推广费总额(元)": "#,##0.00", "期间成本合计(元)": "#,##0.00",
         },
-    },
-    "到期预警": {
+    },    "到期预警": {
         "headers": ALERT_HEADERS,
         "dtypes": {
             "签约面积(平方米)": "float64", "距到期天数": "int64",
@@ -851,7 +861,7 @@ SHEET_SPECS: dict[str, dict] = {
         "headers": SLOT_HEADERS,
         "dtypes": {
             "当前签约面积(平方米)": "float64", "合同份数": "int64",
-            "距最终到期天数": "int64",
+            "距最终到期天数": "int64", "最终到期年份": "int64",
             "当前单位日租金(元/平方米/日)": "float64", "当前抽成扣率": "float64",
             "当前物业费(元/平方米/月)": "float64", "当前推广费(元/平方米/月)": "float64",
             "当前月综合成本(元/平方米/月)": "float64",

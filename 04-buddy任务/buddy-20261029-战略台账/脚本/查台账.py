@@ -155,7 +155,12 @@ def cmd_铺位(args, data):
         sel = [x for x in sel if args.项目 in (x["项目名称"] or "")]
     if args.区域:
         sel = [x for x in sel if args.区域 in (x["所属区域"] or "")]
-    if args.月数:
+    if args.年份:
+        sel = [x for x in sel if x.get("最终到期年份") == args.年份]
+    if args.仅战略:
+        sel = [x for x in sel if x.get("是否战略品牌") == "是"]
+    if args.月数 and not args.年份:
+        # 按年份筛选时不限月数（--月数 默认 12 会误过滤整年）
         lim = args.月数 * 30
         sel = [x for x in sel if 0 <= x["距最终到期天数"] <= lim]
 
@@ -197,6 +202,8 @@ def main():
     ap.add_argument("--项目", default="")
     ap.add_argument("--区域", default="")
     ap.add_argument("--月数", type=int, default=12)
+    ap.add_argument("--年份", type=int, default=0, help="按最终到期年份筛选，如 --年份 2027")
+    ap.add_argument("--仅战略", action="store_true", help="只看战略品牌")
     ap.add_argument("--源文件", default=os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "源数据", "运动男装合同台账1029.xlsx"))
