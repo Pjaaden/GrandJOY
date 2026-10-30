@@ -38,6 +38,7 @@ CLEAR_RANGES = {
     "合同台账明细": "A1:AZ3000",
     "合同级汇总": "A1:AZ1000",
     "到期预警": "A1:AZ500",
+    "铺位续约清单": "A1:AZ500",
     "区域业态汇总": "A1:AZ500",
     "品牌汇总": "A1:AZ500",
     "字段说明": "A1:AZ200",
@@ -217,11 +218,17 @@ def main():
         print(json.dumps(res, ensure_ascii=False, indent=2)[:3000])
     else:
         # 覆盖刷新：先清空各子表旧数据，防行数变少时残留
-        ranges = [f"{n}!{r}" for n, r in CLEAR_RANGES.items()]
-        clr = run([LARK_BIN, "sheets", "+cells-batch-clear", "--as", "user",
-                   "--url", f"https://my.feishu.cn/sheets/{args.表格token}",
-                   "--ranges", json.dumps(ranges, ensure_ascii=False), "--yes"])
-        print("[清空旧数据]", json.dumps(clr, ensure_ascii=False)[:200])
+        # 注意：+cells-batch-clear 遇到不存在的子表会整体失败，
+        # 所以先查工作簿结构，只清真实存在的子表。
+        info = run([LARK_BIN, "sheets", "+workbook-info", "--as", "user",
+                    "--url", f"https://my.feishu.cn/sheets/{args.表格token}"])
+        exists = {s.get("sheet_name") for s in (info.get("data") or {}).get("sheets", [])}
+        ranges = [f"{n}!{r}" for n, r in CLEAR_RANGES.items() if n in exists]
+        if ranges:
+            clr = run([LARK_BIN, "sheets", "+cells-batch-clear", "--as", "user",
+                       "--url", f"https://my.feishu.cn/sheets/{args.表格token}",
+                       "--ranges", json.dumps(ranges, ensure_ascii=False), "--yes"])
+            print("[清空旧数据]", "OK" if clr.get("ok") else json.dumps(clr, ensure_ascii=False)[:200])
 
         cmd = [
             LARK_BIN, "sheets", "+table-put", "--as", "user",

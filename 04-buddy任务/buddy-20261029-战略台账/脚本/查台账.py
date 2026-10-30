@@ -144,6 +144,37 @@ def cmd_项目(args, data):
         print(f"  {k:20} 合同{v['n']:3}  面积{v['area']:>10,.1f}㎡  成本{v['cost']:>14,.0f}")
 
 
+def cmd_铺位(args, data):
+    """铺位级续约谈判清单：粒度=铺位，到期=铺位内所有合同的最晚到期日。"""
+    s = data["铺位续约清单"]
+    sel = s
+    if args.品牌:
+        brands = _expand_brands(args.品牌.split(","))
+        sel = [x for x in sel if x["当前品牌/行业"] in brands]
+    if args.项目:
+        sel = [x for x in sel if args.项目 in (x["项目名称"] or "")]
+    if args.区域:
+        sel = [x for x in sel if args.区域 in (x["所属区域"] or "")]
+    if args.月数:
+        lim = args.月数 * 30
+        sel = [x for x in sel if 0 <= x["距最终到期天数"] <= lim]
+
+    print(f"\n铺位续约清单（≤{args.月数} 个月）：{len(sel)} 个铺位\n")
+    for x in sel:
+        rent = x["当前单位日租金(元/平方米/日)"]
+        rate = x["当前抽成扣率"]
+        print(f"【{x['续约优先级']}】{x['铺位标识']}  {x['楼层']}  {x['当前品牌/行业']}  {x['当前签约面积(平方米)']}㎡")
+        print(f"   商户 {x['当前商户名称']} | {x['所属区域']} | 最终到期 {x['最终到期日']}（剩 {x['距最终到期天数']} 天）")
+        print(f"   当前租金：日租 {rent if rent is not None else '—'} 元/㎡ | 扣率 {rate if rate is not None else '—'} | "
+              f"月综合 {x['当前月综合成本(元/平方米/月)'] if x['当前月综合成本(元/平方米/月)'] is not None else '—'} 元/㎡")
+        if x["合同份数"] > 1 or x["是否已换品牌"] == "是":
+            print(f"   分段：{x['分段合同明细']}")
+        print(f"   提示：{x['续约谈判提示']}\n")
+    print("  按区域:", dict(Counter(x["所属区域"] for x in sel)))
+    print("  按品牌:", dict(Counter(x["当前品牌/行业"] for x in sel)))
+    print(f"  合计面积 {sum(x['当前签约面积(平方米)'] or 0 for x in sel):,.1f}㎡")
+
+
 def cmd_校验(args, data):
     d = data["合同台账明细"]
     cnt = Counter(x["数据校验"] for x in d)
@@ -160,7 +191,7 @@ def cmd_校验(args, data):
 
 def main():
     ap = argparse.ArgumentParser(description="战略台账查询工具")
-    ap.add_argument("命令", choices=["到期", "合同", "品牌", "区域", "项目", "校验"])
+    ap.add_argument("命令", choices=["到期", "合同", "铺位", "品牌", "区域", "项目", "校验"])
     ap.add_argument("--品牌", default="")
     ap.add_argument("--商户", default="")
     ap.add_argument("--项目", default="")
@@ -172,7 +203,7 @@ def main():
     args = ap.parse_args()
 
     data = build_all(args.源文件)
-    {"到期": cmd_到期, "合同": cmd_合同, "品牌": cmd_品牌,
+    {"到期": cmd_到期, "合同": cmd_合同, "铺位": cmd_铺位, "品牌": cmd_品牌,
      "区域": cmd_区域, "项目": cmd_项目, "校验": cmd_校验}[args.命令](args, data)
 
 

@@ -115,6 +115,39 @@ ALERT_HEADERS = [
     "期间固定租金总额(元)",
 ]
 
+# 铺位级续约谈判清单表头
+# 关键口径：粒度 = 铺位（项目+资源位编号），到期 = 该铺位所有合同的最晚到期日（最终到期）。
+# 一个铺位可能有多份分段合同（换签/换品牌/换主体），只有全部到期后才需要总部介入。
+SLOT_HEADERS = [
+    "项目名称",
+    "资源位编号",
+    "楼层",
+    "铺位标识",
+    "当前品牌/行业",
+    "当前商户名称",
+    "当前签约面积(平方米)",
+    "所属区域",
+    "三级业态",
+    "合同份数",
+    "分段合同明细",
+    "是否已换品牌",
+    "最终到期日",
+    "距最终到期天数",
+    "续约优先级",
+    "当前单位日租金(元/平方米/日)",
+    "当前抽成扣率",
+    "当前物业费(元/平方米/月)",
+    "当前推广费(元/平方米/月)",
+    "当前月综合成本(元/平方米/月)",
+    "当前在租期次",
+    "当前期次起租日",
+    "当前期次到期日",
+    "免租期天数(天)",
+    "日租金计算方式",
+    "缴付租金方法",
+    "续约谈判提示",
+]
+
 # 区域 × 业态 汇总表头
 REGION_HEADERS = [
     "所属区域",
@@ -417,6 +450,147 @@ def build_contract(detail: list[dict], src: list[dict]) -> list[dict]:
     return out
 
 
+def build_slot_expiry(contract: list[dict], detail: list[dict],
+                      until: str = "2027-12-31") -> list[dict]:
+    """铺位级续约谈判清单。
+
+    口径要点（招商总部最关心）：
+    1. 粒度 = 铺位（项目名称 + 资源位编号），不是合同。同一个铺位可能有多份分段合同
+       （换签、换品牌、换签约主体），只有全部合同都到期才需要总部介入谈判。
+    2. 「最终到期日」= 该铺位所有合同到期日的最晚值 —— 这才是需要总部协助续约/换品牌的时点。
+    3. 「当前租金水平」= 当前正在履约的那个期次（起租日 ≤ 今天 ≤ 到期日）的真实单价，
+       而不是合同级汇总里的历史加总，否则会拿到旧租金或均值。
+    4. 已换品牌的铺位会标出来，谈判对象是「新品牌」而不是原品牌。
+    """
+    today = dt.date.today()
+    until_d = dt.date.fromisoformat(until)
+
+    # 合同编号 → 期次明细
+    by_cid: dict[str, list[dict]] = defaultdict(list)
+    for r in detail:
+        by_cid[r["合同编号"]].append(r)
+
+    # 当前正在履约的期次（每份合同同一时刻只可能有一期在租）
+    live_phase: dict[str, dict] = {}
+    for r in detail:
+        s, e = _date(r.get("起租日")), _date(r.get("到期日"))
+        if s and e and s <= today <= e:
+            live_phase[r["合同编号"]] = r
+
+    # 铺位 → 合同列表
+    slots: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for x in contract:
+        slots[(x["项目名称"], x["资源位编号"])].append(x)
+
+    out: list[dict] = []
+    for (proj, slot_no), cons in slots.items():
+        ends = [_date(x["合同到期日"]) for x in cons if x["合同到期日"]]
+        if not ends:
+            continue
+        final = max(ends)
+        if final > until_d:
+            continue
+
+        # 当前在租的那份合同
+        live_c = None
+        for x in cons:
+            if x["合同编号"] in live_phase:
+                live_c = x
+                break
+        if live_c is None:
+            # 没有在租期次（全部已过期）——仍要列出，用最后一份合同兜底
+            live_c = sorted(cons, key=lambda y: y["合同到期日"] or "")[-1]
+        phase = live_phase.get(live_c["合同编号"])
+
+        brands = {x["品牌/行业"] for x in cons}
+        changed = len(brands) > 1
+
+        # 分段合同明细（一行看清这个铺位的签约历史）
+        seg = []
+        for x in sorted(cons, key=lambda y: y["合同起租日"] or ""):
+            seg.append(f"{x['品牌/行业']}({x['合同起租日']}~{x['合同到期日']})")
+        seg_text = " | ".join(seg)
+
+        days_left = (final - today).days
+        if days_left <= 90:
+            priority = "P0 立即启动"
+        elif days_left <= 180:
+            priority = "P1 半年内启动"
+        elif days_left <= 365:
+            priority = "P2 一年内启动"
+        else:
+            priority = "P3 一年内以上"
+
+        rent = phase["单位日租金(元/平方米/日)"] if phase else None
+        rate = phase["抽成扣率"] if phase else None
+        pf = phase["物业费(元/平方米/月)"] if phase else None
+        promo = phase["推广费(元/平方米/月)"] if phase else None
+
+        # 月综合成本：固租日租金×30 + 物业 + 推广；抽成制无固定租金则只算物业+推广
+        if rent is not None:
+            monthly = round(rent * 30 + (pf or 0) + (promo or 0), 2)
+        elif pf is not None or promo is not None:
+            monthly = round((pf or 0) + (promo or 0), 2)
+        else:
+            monthly = None
+
+        tips = []
+        if changed:
+            tips.append("该铺位已换品牌，谈判对象为现品牌")
+        if len(cons) > 1:
+            tips.append(f"含{len(cons)}份分段合同，需整体到期后再谈")
+        if phase is None:
+            tips.append("当前无在租期次，需先确认铺位状态")
+        else:
+            pay = phase["缴付租金方法"]
+            if pay == "抽成":
+                tips.append(f"纯抽成制合同，无固定租金（扣率{rate if rate is not None else '—'}），续约需另议扣率")
+            elif pay == "两者取高" and not rent:
+                # BI 里两者取高合同若日租金记 0，意味固定租金下限为 0 —— 商场没有保底
+                tips.append(f"两者取高但固定租金下限为0（扣率{rate if rate is not None else '—'}），"
+                            f"现无保底租金，续约应争取设定保底")
+            elif rent is None:
+                tips.append("无固定租金数据，需另议扣率")
+        if phase and phase.get("免租期天数(天)"):
+            tips.append(f"含免租期{phase['免租期天数(天)']}天，续约时需重新约定")
+        if rent:
+            tips.append(f"现日租金{rent}元/㎡，月综合成本约{monthly}元/㎡（到期前{abs(days_left) if days_left < 0 else days_left}天）")
+
+        out.append({
+            "项目名称": proj,
+            "资源位编号": slot_no,
+            "楼层": live_c.get("楼层", ""),
+            "铺位标识": f"{proj} {slot_no}",
+            "当前品牌/行业": live_c["品牌/行业"],
+            "当前商户名称": live_c["商户名称"],
+            "当前签约面积(平方米)": live_c["签约面积(平方米)"],
+            "所属区域": live_c["所属区域"],
+            "三级业态": live_c["三级业态"],
+            "合同份数": len(cons),
+            "分段合同明细": seg_text,
+            "是否已换品牌": "是" if changed else "否",
+            "最终到期日": final.isoformat(),
+            "距最终到期天数": days_left,
+            "续约优先级": priority,
+            "当前单位日租金(元/平方米/日)": rent,
+            "当前抽成扣率": rate,
+            "当前物业费(元/平方米/月)": pf,
+            "当前推广费(元/平方米/月)": promo,
+            "当前月综合成本(元/平方米/月)": monthly,
+            "当前在租期次": phase["合同期间"] if phase else None,
+            "当前期次起租日": phase["起租日"] if phase else None,
+            "当前期次到期日": phase["到期日"] if phase else None,
+            "免租期天数(天)": phase["免租期天数(天)"] if phase else None,
+            "日租金计算方式": phase["日租金计算方式"] if phase else None,
+            "缴付租金方法": phase["缴付租金方法"] if phase else None,
+            "续约谈判提示": "；".join(tips),
+        })
+
+    order = {"P0 立即启动": 0, "P1 半年内启动": 1, "P2 一年内启动": 2, "P3 一年内以上": 3}
+    out.sort(key=lambda x: (order.get(x["续约优先级"], 9), x["距最终到期天数"]))
+    return out
+
+
 # ── 到期预警 ────────────────────────────────────────────────────────────────
 def build_alert(contract: list[dict]) -> list[dict]:
     """提取未来 12 个月内到期的合同，按紧急程度排序。"""
@@ -564,6 +738,15 @@ def build_spec() -> list[dict]:
         ("楼层", "楼层", "取自明细表，同合同内去重合并", "一合同多楼层时以、分隔"),
         ("到期预警", "派生", "按距到期天数自动分级", "🔴90天内 / 🟠半年内 / 🟡一年内 / 🟢1-2年 / ⚪2年以上"),
         ("距到期天数", "派生", "合同到期日 − 今天", "负数表示已过期"),
+        ("铺位标识", "派生", "项目名称 + 空格 + 资源位编号", "铺位级清单主键"),
+        ("最终到期日", "派生", "该铺位所有合同到期日的最晚值", "同一铺位有多份分段合同时，取最晚那份——这才是需要总部介入的时点"),
+        ("距最终到期天数", "派生", "最终到期日 − 今天", ""),
+        ("续约优先级", "派生", "按距最终到期天数分级", "P0 立即启动(≤90天) / P1 半年内 / P2 一年内 / P3 一年内以上"),
+        ("当前单位日租金(元/平方米/日)", "明细表当前在租期次", "取当前正在履约那一期的真实单价", "不是合同级历史加总，避免拿到旧租金"),
+        ("当前月综合成本(元/平方米/月)", "派生", "日租金×30 + 物业费 + 推广费", "抽成制合同无固定租金时只算物业+推广"),
+        ("分段合同明细", "派生", "铺位内各合同的「品牌(起租~到期)」串联", "看铺位签约历史用"),
+        ("是否已换品牌", "派生", "铺位内合同品牌数 > 1", "换品牌铺位的谈判对象是现品牌"),
+        ("续约谈判提示", "派生", "按换品牌/多合同/抽成制/免租期自动生成", "谈判前必读"),
         ("是否战略品牌", "是否战略品牌", "BI「是否战略品牌」1→是，0→否", ""),
         ("缴付租金方法", "繳付租金方法", "原样取自 BI", "固租 / 抽成 / 两者取高"),
         ("日租金计算方式", "日租金计算方式", "原样取自 BI", "日面积 / 月面积"),
@@ -606,6 +789,7 @@ def build_all(path: str, note: str = "") -> dict[str, list[dict]]:
     region = build_region(contract, detail)
     brand = build_brand(contract, detail)
     alert = build_alert(contract)
+    slot_expiry = build_slot_expiry(contract, detail)
     spec = build_spec()
     version = build_version(meta, detail, contract, note)
 
@@ -613,6 +797,7 @@ def build_all(path: str, note: str = "") -> dict[str, list[dict]]:
         "合同台账明细": detail,
         "合同级汇总": contract,
         "到期预警": alert,
+        "铺位续约清单": slot_expiry,
         "区域业态汇总": region,
         "品牌汇总": brand,
         "字段说明": spec,
@@ -660,6 +845,22 @@ SHEET_SPECS: dict[str, dict] = {
         "formats": {
             "签约面积(平方米)": "#,##0.00", "期间成本合计(元)": "#,##0.00",
             "期间固定租金总额(元)": "#,##0.00",
+        },
+    },
+    "铺位续约清单": {
+        "headers": SLOT_HEADERS,
+        "dtypes": {
+            "当前签约面积(平方米)": "float64", "合同份数": "int64",
+            "距最终到期天数": "int64",
+            "当前单位日租金(元/平方米/日)": "float64", "当前抽成扣率": "float64",
+            "当前物业费(元/平方米/月)": "float64", "当前推广费(元/平方米/月)": "float64",
+            "当前月综合成本(元/平方米/月)": "float64",
+            "当前在租期次": "int64", "免租期天数(天)": "int64",
+        },
+        "formats": {
+            "当前签约面积(平方米)": "#,##0.00", "当前单位日租金(元/平方米/日)": "#,##0.0000",
+            "当前抽成扣率": "0.00%", "当前物业费(元/平方米/月)": "#,##0.00",
+            "当前推广费(元/平方米/月)": "#,##0.00", "当前月综合成本(元/平方米/月)": "#,##0.00",
         },
     },
     "区域业态汇总": {

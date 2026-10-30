@@ -24,7 +24,15 @@ RULES = [
     ("🟠 半年内到期", "#FFF3E0", "#B54708"),
     ("🟡 一年内到期", "#FFFCE6", "#A16207"),
 ]
+# 续约优先级（P0 最急 → P3）
+PRIORITY_RULES = [
+    ("P0 立即启动", "#FFE3E3", "#B42318"),
+    ("P1 半年内启动", "#FFF3E0", "#B54708"),
+    ("P2 一年内启动", "#FFFCE6", "#A16207"),
+    ("P3 一年内以上", "#E8EEF7", "#1F3864"),
+]
 ALERT_SHEET = "到期预警"
+SLOT_SHEET = "铺位续约清单"
 MAX_ROWS = 500
 
 
@@ -45,14 +53,15 @@ def main():
     url = f"https://my.feishu.cn/sheets/{args.表格token}"
 
     # 已有规则先清掉（条件格式规则对象不能靠清单元格清掉，需显式删）
-    lst = run([LARK_BIN, "sheets", "+cond-format-list", "--as", "user",
-               "--url", url, "--sheet-name", ALERT_SHEET])
-    rules = (lst.get("data") or {}).get("rules") or (lst.get("data") or {}).get("conditional_formats") or []
-    for r in rules:
-        rid = r.get("rule_id") or r.get("id")
-        if rid:
-            run([LARK_BIN, "sheets", "+cond-format-delete", "--as", "user", "--url", url,
-                 "--sheet-name", ALERT_SHEET, "--rule-id", rid, "--yes"])
+    for sheet in (ALERT_SHEET, SLOT_SHEET):
+        lst = run([LARK_BIN, "sheets", "+cond-format-list", "--as", "user",
+                   "--url", url, "--sheet-name", sheet])
+        rules = (lst.get("data") or {}).get("rules") or (lst.get("data") or {}).get("conditional_formats") or []
+        for r in rules:
+            rid = r.get("rule_id") or r.get("id")
+            if rid:
+                run([LARK_BIN, "sheets", "+cond-format-delete", "--as", "user", "--url", url,
+                     "--sheet-name", sheet, "--rule-id", rid, "--yes"])
 
     rng = json.dumps([f"A2:P{MAX_ROWS}"], ensure_ascii=False)
     for text, back, fore in RULES:
@@ -63,10 +72,22 @@ def main():
         res = run([LARK_BIN, "sheets", "+cond-format-create", "--as", "user", "--url", url,
                    "--sheet-name", ALERT_SHEET, "--rule-type", "expression",
                    "--ranges", rng, "--properties", props])
-        print(f"[条件格式] {text}: {'OK' if res.get('ok') else res}")
+        print(f"[条件格式] {ALERT_SHEET} {text}: {'OK' if res.get('ok') else res}")
 
-    # 子表顺序：看板 → 明细 → 合同级 → 到期预警 → 区域业态 → 品牌 → 字段说明 → 版本记录
-    order = ["台账看板", "合同台账明细", "合同级汇总", ALERT_SHEET,
+    # 铺位续约清单：按优先级上色（O 列 = 续约优先级）
+    slot_rng = json.dumps([f"A2:AA{MAX_ROWS}"], ensure_ascii=False)
+    for text, back, fore in PRIORITY_RULES:
+        props = json.dumps({
+            "style": {"back_color": back, "fore_color": fore},
+            "attrs": [{"formula": [f'=$O2="{text}"']}],
+        }, ensure_ascii=False)
+        res = run([LARK_BIN, "sheets", "+cond-format-create", "--as", "user", "--url", url,
+                   "--sheet-name", SLOT_SHEET, "--rule-type", "expression",
+                   "--ranges", slot_rng, "--properties", props])
+        print(f"[条件格式] {SLOT_SHEET} {text}: {'OK' if res.get('ok') else res}")
+
+    # 子表顺序：看板 → 明细 → 合同级 → 到期预警 → 铺位续约 → 区域业态 → 品牌 → 字段说明 → 版本记录
+    order = ["台账看板", "合同台账明细", "合同级汇总", ALERT_SHEET, SLOT_SHEET,
              "区域业态汇总", "品牌汇总", "字段说明", "版本记录"]
     info = run([LARK_BIN, "sheets", "+workbook-info", "--as", "user", "--url", url])
     names = [s.get("sheet_name") for s in (info.get("data") or {}).get("sheets", [])]
