@@ -1,0 +1,492 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+沈阳大悦城 2027 年到期战略品牌 —— 招调决策简表（单 sheet）
+
+合并三块数据：
+1. 战略台账 BI（源数据/运动男装合同台账1029.xlsx）—— 到期日、面积、当前租金
+2. 店铺销售月报（店铺销售月报.xlsx）—— 25/26 年月均销售、同比
+3. 27 年招调计划（用户提供，硬编码于 ATTR_PLAN）—— 计划品牌、固租、扣率、租金同比
+
+口径：
+- 月面积折算 365/12 = 30.4167 天
+- 月均销售 = 区间销售额合计 ÷ 区间自然月数
+- 月均销售同比 = 26年月均 ÷ 25年月均 - 1
+- 租售比 = 月租金 ÷ 月均销售额
+- 招调后租金同比 = 计划固租 ÷ 当前固租 - 1（与招调表一致）
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import os
+from collections import defaultdict
+
+import openpyxl
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+TASK_ROOT = os.path.dirname(BASE)
+PROJ_ROOT = os.path.dirname(os.path.dirname(TASK_ROOT))
+LEDGER = os.path.join(PROJ_ROOT, "04-buddy任务", "buddy-20261029-战略台账",
+                      "源数据", "运动男装合同台账1029.xlsx")
+SALES = "/Users/zhijian/Downloads/店铺销售月报.xlsx"
+OUT_DIR = os.path.join(TASK_ROOT, "产出")
+DAYS = 365 / 12
+
+# 27 年招调计划（用户提供）
+ATTR_PLAN = {
+    "B114": dict(铺位="B114", 原品牌="MLB", 计划品牌="MLB", 面积=280.34, 年限=2,
+                 固租=21.0, 扣率=0.11, 租金同比=-0.20, 物业费=65, 推广费=10,
+                 原到期="2027-04-12", 签约时间="2027/3", 开业="—"),
+    "C119": dict(铺位="C119", 原品牌="CHARLES&KEITH", 计划品牌="CHARLES&KEITH", 面积=161.43, 年限=3,
+                 固租=18.5, 扣率=0.17, 租金同比=0.0, 物业费=70, 推广费=10,
+                 原到期="2027-09-05", 签约时间="2027/8", 开业="—"),
+    "B305": dict(铺位="B305", 原品牌="GXG", 计划品牌="GXG", 面积=126.97, 年限=1,
+                 固租=15.31, 扣率=0.21, 租金同比=-0.15, 物业费=65, 推广费=10,
+                 原到期="2027-02-18", 签约时间="2027/1", 开业="—"),
+    "E114": dict(铺位="E114", 原品牌="李宁", 计划品牌="李宁", 面积=387.62, 年限=1,
+                 固租=25.96, 扣率=0.20, 租金同比=-0.04, 物业费=65, 推广费=10,
+                 原到期="2027-12-29", 签约时间="2027/12", 开业="—"),
+    # 26年底续约一年至27年底，本次招调为再续一年至28年底
+    "E320-321": dict(铺位="E320-321", 原品牌="MLB", 计划品牌="MLB", 面积=265.93, 年限=1,
+                     固租=2.00, 扣率=0.12, 租金同比=0.0, 物业费=70, 推广费=10,
+                     原到期="2027-12-29", 签约时间="2027/12", 开业="—"),
+}
+
+# 铺位号 ↔ 台账合同编号 ↔ 销售表店铺编码（两表合同号不完全一致，按实际核对建映射）
+UNIT_MAP = {
+    "B114":     dict(合同="HT2024040700089-1",          销售="HT2024040700089"),
+    "C119":     dict(合同="00000300000222201901",        销售=None),  # 销售表无此店数据
+    "B305":     dict(合同="0000030003C35001201701",      销售="000003B30504"),
+    "E114":     dict(合同="HT2022101700057",             销售="HT2022101700057"),
+    "E320-321": dict(合同="HT2025120300063",             销售="HT2025120300063"),
+}
+CONTRACT_TO_UNIT = {v["合同"]: k for k, v in UNIT_MAP.items()}
+
+# ---------- 样式 ----------
+THIN = Side(style="thin", color="BFBFBF")
+MED = Side(style="medium", color="1F4E79")
+BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+GRP_FILL = PatternFill("solid", fgColor="1F4E79")
+GRP_FONT = Font(name="微软雅黑", size=10, bold=True, color="FFFFFF")
+HDR_FILL = PatternFill("solid", fgColor="D9E2F3")
+HDR_FONT = Font(name="微软雅黑", size=9, bold=True, color="1F3864")
+BODY = Font(name="微软雅黑", size=10)
+BOLD = Font(name="微软雅黑", size=10, bold=True)
+TITLE = Font(name="微软雅黑", size=15, bold=True, color="1F4E79")
+SUB = Font(name="微软雅黑", size=9, color="595959")
+NOTE = Font(name="微软雅黑", size=9, color="C00000")
+RED = PatternFill("solid", fgColor="FCE4E4")
+YEL = PatternFill("solid", fgColor="FFF2CC")
+GRY = PatternFill("solid", fgColor="F2F2F2")
+GRN = PatternFill("solid", fgColor="E2EFDA")
+ORG = PatternFill("solid", fgColor="FBE5D6")
+
+
+def read_ledger(stat=dt.date(2026, 10, 28)):
+    wb = openpyxl.load_workbook(LEDGER, data_only=True)
+    ws = wb["合同台账"]
+    hdr = [c.value for c in ws[1]]
+    rows = [dict(zip(hdr, r)) for r in ws.iter_rows(min_row=2, values_only=True)
+            if r[1] == "沈阳大悦城"]
+    by_c = defaultdict(list)
+    for r in rows:
+        by_c[r["合同编号"]].append(r)
+    out = {}
+    for cid, ps in by_c.items():
+        ps.sort(key=lambda p: p["起租日"])
+        base = ps[0]
+        final_end = max(p["到期日"].date() for p in ps)
+        cur = [p for p in ps if p["起租日"].date() <= stat <= p["到期日"].date()]
+        p = cur[0] if cur else ps[-1]
+        out[cid] = dict(
+            品牌=base["品牌/行业"], 店铺=base["店铺名称"], 楼层=base["楼层"],
+            楼栋=base["楼栋"], 铺位=base["资源位名称"], 资源位=base["资源位编号"],
+            面积=base["签约面积"], 商户=base["商户名称"], 合同=cid,
+            起租=ps[0]["起租日"].date(), 最终到期=final_end,
+            当前日租=p["单位日租金(元/平方米/日)"], 当前扣率=(p["抽成扣率(%)"] or 0) * 100,
+            物业费=base["物业费(元/平方米/月)"], 推广费=base["推广费(元/平方米/月)"],
+            期次=p["合同期间"], 战略=("是" if str(base["是否战略品牌"]).strip() == "1" else "否"),
+            _end_by_contract=max(p["承租期-到期日"].date() for p in ps),
+        )
+    return out
+
+
+def read_sales():
+    wb = openpyxl.load_workbook(SALES, data_only=True)
+    ws = wb["店铺销售月报"]
+    hdr = [c.value for c in ws[1]]
+    ix = {h: i for i, h in enumerate(hdr)}
+    data = defaultdict(dict)
+    for r in ws.iter_rows(min_row=2, values_only=True):
+        key = r[ix["店铺编码"]]
+        data[key][str(r[ix["发生月份"]])] = r[ix["销售金额(元)"]] or 0
+    return data
+
+
+def sales_metrics(months: dict):
+    """返回 25/26 月均、同比、同比口径说明。"""
+    m25 = {m: v for m, v in months.items() if m.startswith("2025")}
+    m26 = {m: v for m, v in months.items() if m.startswith("2026")}
+    a25 = sum(m25.values()) / len(m25) if m25 else None
+    a26 = sum(m26.values()) / len(m26) if m26 else None
+
+    # 可比口径：取两年同月份（1-10月），MLB L3 店仅25年12月有数据 → 不可比
+    common = sorted(set(int(m[4:]) for m in m25) & set(int(m[4:]) for m in m26))
+    cy25 = sum(m25[f"2025{k:02d}"] for k in common) / len(common) if common else None
+    cy26 = sum(m26[f"2026{k:02d}"] for k in common) / len(common) if common else None
+    yoy_c = (cy26 / cy25 - 1) if (cy25 and cy26) else None
+    # 主口径同比只认「同月可比」：25年数据不满 6 个月的新店不计算同比
+    yoy = yoy_c if (yoy_c is not None and len(m25) >= 6) else None
+
+    note = []
+    if len(m25) == 0:
+        note.append("无25年数据")
+    elif len(m25) < 6:
+        note.append(f"25年仅{len(m25)}个月（新店），不可比")
+    elif len(m25) != 12:
+        note.append(f"25年仅{len(m25)}个月")
+    if len(m26) == 10:
+        note.append("26年1-10月")
+    elif len(m26) == 0:
+        note.append("无26年数据")
+    if yoy is not None:
+        note.append(f"同比取{'/'.join(str(k) for k in common)}月可比口径")
+    return dict(a25=a25, a26=a26, yoy=yoy, yoy_c=yoy_c,
+                n25=len(m25), n26=len(m26), common=len(common),
+                note="；".join(note))
+
+
+def main():
+    ledger = read_ledger()
+    sales = read_sales()
+    os.makedirs(OUT_DIR, exist_ok=True)
+
+    # 组装每行的数据
+    rows = []
+    for unit, plan in ATTR_PLAN.items():
+        mp = UNIT_MAP[unit]
+        cid, sid = mp["合同"], mp["销售"]
+        L = ledger.get(cid, {})
+        s = sales.get(sid, {}) if sid else {}
+        m = sales_metrics(s)
+        area = plan["面积"]
+        cur_daily = L.get("当前日租") or 0
+        cur_month_rent = cur_daily * area * DAYS
+        # C119 台账无此铺位记录，现行物业费按招调计划列示（与计划一致）
+        cur_prop_rate = L.get("物业费") if L.get("物业费") else plan["物业费"]
+        cur_prop = cur_prop_rate * area
+        cur_promo = plan["推广费"] * area
+        cur_total = cur_month_rent + cur_prop + cur_promo
+
+        new_month_rent = plan["固租"] * area * DAYS
+        new_prop = plan["物业费"] * area
+        new_promo = plan["推广费"] * area
+        new_total = new_month_rent + new_prop + new_promo
+
+        # 租售比
+        a26 = m["a26"]
+        cr_cur = cur_month_rent / a26 if a26 else None
+        cr_cur_all = cur_total / a26 if a26 else None
+        cr_new = new_month_rent / a26 if a26 else None
+        cr_new_all = new_total / a26 if a26 else None
+
+        # 两者取高：固租 vs 抽成
+        pct_rent = (a26 * L.get("当前扣率", 0) / 100) if a26 else None
+        actual = max(cur_month_rent, pct_rent) if pct_rent else cur_month_rent
+        ratio_pct = (pct_rent / cur_month_rent) if (pct_rent and cur_month_rent) else None
+
+        rows.append(dict(
+            unit=unit, plan=plan, L=L, m=m, sid=sid, sales=s,
+            area=area,
+            当前日租=cur_daily, 当前月租=cur_month_rent, 当前综合=cur_total,
+            抽成租金=pct_rent, 实际收租=actual, 抽成固租比=ratio_pct,
+            现行物业费=cur_prop_rate,
+            计划日租=plan["固租"], 计划月租=new_month_rent, 计划综合=new_total,
+            cr_cur=cr_cur, cr_cur_all=cr_cur_all, cr_new=cr_new, cr_new_all=cr_new_all,
+            m25=m["a25"], m26=a26, yoy=m["yoy"], yoy_c=m["yoy_c"],
+            m25_rent=(m["a25"] * cr_cur if (m["a25"] and cr_cur) else None),
+        ))
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "27年到期招调简表"
+
+    # ===== 标题区 =====
+    ws.merge_cells("A1:W1")
+    ws["A1"] = "沈阳大悦城　2027年到期战略品牌 · 招调决策简表"
+    ws["A1"].font = TITLE
+    ws["A1"].alignment = Alignment(vertical="center")
+    ws.row_dimensions[1].height = 32
+
+    ws.merge_cells("A2:W2")
+    ws["A2"] = ("数据口径：合同台账 2026-10-28 ｜ 销售月报 2025.01-2026.10 ｜ 招调价为 27 年招调计划 　"
+                "月租金 = 日租金 × 面积 × 30.4167（365/12）　租售比 = 月租金 ÷ 26年月均销售")
+    ws["A2"].font = SUB
+    ws.row_dimensions[2].height = 20
+
+    # ===== 列定义 =====
+    # 双层表头：分组行 3，列名行 4，数据从行 5 起
+    groups = [
+        ("基本信息", 5),
+        ("到期与招调时间", 3),
+        ("当前租金水平", 8),
+        ("27年招调计划租金", 6),
+        ("销售表现", 5),
+        ("租售比", 4),
+        ("判断", 2),
+    ]
+    cols = [
+        "铺位号", "品牌", "楼层", "面积(㎡)", "战略品牌",
+        "原合同到期", "计划签约", "计划开业",
+        "现行日租(元/㎡/日)", "现行扣率(%)", "现行月租金(元)", "抽成租金(元)",
+        "实际收租(元)", "现行物业费(元/㎡/月)", "现行月综合成本(元)",
+        "计划日租(元/㎡/日)", "计划扣率(%)", "租金同比(%)", "计划年限(年)",
+        "计划月租金(元)", "计划月综合成本(元)",
+        "25年月均销售(元)", "26年月均销售(元)", "月均销售同比(%)", "26年最新月销售(元)",
+        "现行租售比(%)", "计划后租售比(%)", "租售比变动(pp)", "租售比评级",
+        "抽成/固租", "续约建议",
+    ]
+    ncol = len(cols)
+    last_col = get_column_letter(ncol)
+
+    c = 1
+    for name, span in groups:
+        if span > 1:
+            ws.merge_cells(start_row=3, start_column=c, end_row=3, end_column=c + span - 1)
+        cell = ws.cell(row=3, column=c, value=name)
+        cell.fill, cell.font = GRP_FILL, GRP_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        for k in range(c, c + span):
+            ws.cell(row=3, column=k).border = Border(left=THIN, right=THIN, top=MED, bottom=THIN)
+            ws.cell(row=3, column=k).fill = GRP_FILL
+        c += span
+
+    for j, h in enumerate(cols, start=1):
+        cell = ws.cell(row=4, column=j, value=h)
+        cell.fill, cell.font = HDR_FILL, HDR_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=MED)
+    ws.row_dimensions[4].height = 46
+
+    # ===== 数据行 =====
+    def rating(cr):
+        if cr is None:
+            return "—"
+        if cr > 0.40:
+            return "极高危"
+        if cr > 0.25:
+            return "偏高"
+        if cr > 0.18:
+            return "略高"
+        if cr >= 0.10:
+            return "健康"
+        return "偏低"
+
+    r = 5
+    for d in rows:
+        p, L, m = d["plan"], d["L"], d["m"]
+        sm = d["sales"]
+        last_key = max(sm) if sm else None
+        last_val = sm[last_key] if last_key else None
+
+        cr = d["cr_cur"]
+        if cr is None:
+            advice = "无26年销售数据，无法评估经营，须补数据后再定"
+        elif cr > 0.40:
+            advice = "固租远超销售承载，建议降固租换长约或转纯抽成"
+        elif cr > 0.25:
+            advice = "租金压力大，建议小幅降租+提高扣率"
+        elif cr < 0.10:
+            advice = "租金偏低，有上调空间"
+        else:
+            advice = "租金在合理区间，可正常续约"
+
+        vals = [
+            d["unit"], (L.get("品牌") or p["原品牌"]), L.get("楼层", ""), d["area"], L.get("战略", ""),
+            L.get("最终到期"), p["签约时间"], p["开业"],
+            d["当前日租"], L.get("当前扣率", 0), d["当前月租"], d["抽成租金"],
+            d["实际收租"], d["现行物业费"], d["当前综合"],
+            d["计划日租"], p["扣率"] * 100, p["租金同比"] * 100, p["年限"],
+            d["计划月租"], d["计划综合"],
+            d["m25"], d["m26"], (d["yoy"] * 100 if d["yoy"] is not None else None), last_val,
+            (d["cr_cur"] * 100 if d["cr_cur"] else None),
+            (d["cr_new"] * 100 if d["cr_new"] else None),
+            ((d["cr_new"] - d["cr_cur"]) * 100 if (d["cr_new"] and d["cr_cur"]) else None),
+            rating(cr),
+            (d["抽成固租比"] * 100 if d["抽成固租比"] else None),
+            advice,
+        ]
+        for j, v in enumerate(vals, start=1):
+            cell = ws.cell(row=r, column=j, value=v)
+            cell.font, cell.border = BODY, BORDER
+            cell.alignment = Alignment(horizontal="center", vertical="center",
+                                       wrap_text=(j in (2, 29, 31)))
+        # 到期预警底色
+        end = L.get("最终到期")
+        if isinstance(end, dt.date):
+            days_left = (end - dt.date(2026, 11, 2)).days
+            f = RED if days_left <= 90 else (YEL if days_left <= 180 else None)
+            if f:
+                for j in (1, 2, 6):
+                    ws.cell(row=r, column=j).fill = f
+        # 计划租金低于现行 → 橙底
+        if p["租金同比"] < 0:
+            ws.cell(row=r, column=18).fill = ORG
+        # 租售比评级着色
+        rc = ws.cell(row=r, column=29)
+        if cr is None:
+            rc.fill = GRY
+        elif cr > 0.40:
+            rc.fill = RED
+            rc.font = Font(name="微软雅黑", size=10, bold=True, color="C00000")
+        elif cr > 0.25:
+            rc.fill = ORG
+        elif cr < 0.10:
+            rc.fill = GRN
+        r += 1
+
+    # ===== 合计行 =====
+    tot_row = r
+    ws.cell(row=tot_row, column=1, value="合计 / 加权")
+    ws.merge_cells(start_row=tot_row, start_column=1, end_row=tot_row, end_column=3)
+    ta = sum(d["area"] for d in rows)
+    ws.cell(row=tot_row, column=4, value=ta)
+    ws.cell(row=tot_row, column=11, value=sum(d["当前月租"] for d in rows))
+    ws.cell(row=tot_row, column=12, value=sum(d["抽成租金"] for d in rows if d["抽成租金"]))
+    ws.cell(row=tot_row, column=13, value=sum(d["实际收租"] for d in rows))
+    ws.cell(row=tot_row, column=15, value=sum(d["当前综合"] for d in rows))
+    ws.cell(row=tot_row, column=20, value=sum(d["计划月租"] for d in rows))
+    ws.cell(row=tot_row, column=21, value=sum(d["计划综合"] for d in rows))
+    s25 = sum(d["m25"] for d in rows if d["m25"])
+    s26 = sum(d["m26"] for d in rows if d["m26"])
+    ws.cell(row=tot_row, column=22, value=s25)
+    ws.cell(row=tot_row, column=23, value=s26)
+    # 合计同比按逐店可比口径汇总（仅含有同比数据的店）
+    w25 = sum(d["m25"] for d in rows if d["m25"] and d["yoy"] is not None)
+    w26 = sum(d["m26"] for d in rows if d["m26"] and d["yoy"] is not None)
+    ws.cell(row=tot_row, column=24, value=((w26 / w25 - 1) * 100) if (w25 and w26) else None)
+    # 合计租售比：分子分母都只取「有26年销售数据」的铺位，否则会被无数据铺位的租金虚高
+    dd = [d for d in rows if d["m26"]]
+    d_rent = sum(d["当前月租"] for d in dd)
+    d_rent_new = sum(d["计划月租"] for d in dd)
+    d_sales = sum(d["m26"] for d in dd)
+    ws.cell(row=tot_row, column=26, value=(d_rent / d_sales * 100) if d_sales else None)
+    ws.cell(row=tot_row, column=27, value=(d_rent_new / d_sales * 100) if d_sales else None)
+    ws.cell(row=tot_row, column=28, value=((d_rent_new - d_rent) / d_sales * 100) if d_sales else None)
+    ws.cell(row=tot_row, column=30, value=(sum(d["抽成租金"] for d in dd if d["抽成租金"]) / sum(d["当前月租"] for d in dd) * 100) if dd else None)
+    nmiss = len(rows) - len(dd)
+    ws.cell(row=tot_row, column=31, value=(f"租售比仅按有26年销售的{len(dd)}个铺位加权计算"
+                                           + (f"；另{nmiss}个铺位（" + "、".join(d["unit"] for d in rows if not d["m26"]) + "）无销售数据，未纳入" if nmiss else "")))
+    for j in range(1, 31):
+        cell = ws.cell(row=tot_row, column=j)
+        cell.font = BOLD
+        cell.border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+        cell.fill = GRY
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.cell(row=tot_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
+
+    # ===== 数字格式 =====
+    fmts = {
+        4: "#,##0.00", 6: "yyyy-mm-dd", 7: "@", 8: "@",
+        9: "0.00", 10: "0.0", 11: "#,##0", 12: "#,##0", 13: "#,##0", 14: "0.0", 15: "#,##0",
+        16: "0.00", 17: "0.0", 18: "0.0\"%\"", 19: "0",
+        20: "#,##0", 21: "#,##0",
+        22: "#,##0", 23: "#,##0", 24: "0.0\"%\"", 25: "#,##0",
+        26: "0.0\"%\"", 27: "0.0\"%\"", 28: "+0.0\"pp\";-0.0\"pp\"",
+        30: "0.0\"%\"",
+    }
+    for i in range(5, tot_row + 1):
+        for j, f in fmts.items():
+            ws.cell(row=i, column=j).number_format = f
+
+    # ===== 列宽 =====
+    widths = [11, 15, 7, 10, 9, 11, 10, 9,
+              11, 9, 12, 11, 12, 11, 13,
+              11, 9, 9, 8, 12, 13,
+              13, 13, 11, 13,
+              10, 10, 10, 10, 9, 40]
+    for j, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(j)].width = w
+    ws.row_dimensions[5].height = 34
+
+    # ===== 底部说明 =====
+    n = tot_row + 2
+    # 动态计算：E114 计划固租 25.96 实际高于现行 25.20，故固租列口径为净增
+    rent_by_plan = sum(d["计划月租"] for d in rows) - sum(d["当前月租"] for d in rows)
+    # 若 B114 按 -20% 实际执行到 16.80，则让租规模
+    b114 = next(d for d in rows if d["unit"] == "B114")
+    b114_give = (b114["当前日租"] - b114["当前日租"] * 0.8) * b114["area"] * DAYS
+    notes = [
+        ("注1", "MLB 为两家独立门店，必须分开看：B114（L1/280.34㎡）2027-04-12 到期，销售数据仅至 2025-05（5个月），2026 年完全无数据；"
+                "E320-321（L3/265.93㎡）2025-12 开业，2026 年 1-10 月数据完整，2025 年仅 12 月一个月不可比。"
+                "两家同为 MLB 但楼层与租金差异极大：B114 21.00 元/㎡/日，E320-321 仅 2.00 元/㎡/日，不可混为一谈。"),
+        ("注2", "E320-321 于 2026 年底已续约一年至 2027 年底，本次 27 年招调为再续一年至 2028 年底。计划固租 2.00 元/㎡/日、同比 0%，"
+                "属维持性续约。但该铺位位于 L3，2026 年月均销售 34.5 万元、坪效约 1,187 元/㎡/月，经营表现良好，"
+                "现租售比仅 14.1%，明显低于同批商户，建议谈判时争取上调租金而非原价续约。"),
+        ("注3", "月均销售同比采用「可比口径」：取 2025 与 2026 同月份（1-10 月）分别求均值后再比，消除 2026 年仅 1-10 月的季节性偏差。"
+                "B114（25 年只到 5 月）、E320-321（25 年仅 12 月，新店）、C119（无销售数据）因样本不足未计算同比。"),
+        ("注4", "租售比 = 月固定租金 ÷ 26 年月均销售。零售健康区间约 10%~18%。GXG 49.1%、李宁 58.1%，均超过 40% 的严重警戒线，"
+                "说明固租定价已严重脱离销售承载能力，商户持续亏损、续约意愿弱，这是本次招调计划普遍让租的根本原因。"
+                "仅 E320-321（14.1%）处于健康区间。"),
+        ("注5", "抽成/固租 = 按现行扣率测算的抽成租金 ÷ 固租。李宁仅 34.4%、GXG 42.8%，即「两者取高」下实际全部按固租收租，"
+                "抽成条款常年不触发。这意味着单纯提高扣率对实收没有任何帮助，只有下调固租才是真实减负；"
+                "反之若要提升租金，必须同时评估商户销售能否支撑。E320-321 抽成/固租 85.3%，已接近临界值。"),
+        ("注6", f"关于让租：按「计划固租」列口径，五铺位月租金合计 {sum(d['计划月租'] for d in rows):,.0f} 元，"
+                f"较现行 {sum(d['当前月租'] for d in rows):,.0f} 元 {rent_by_plan:+,.0f} 元/月"
+                f"（年化 {rent_by_plan*12:+,.0f} 元）。其中 E114 计划固租 25.96 高于现行 25.20（+3.0%），"
+                f"虽标注同比 -4%，但因口径差异实际为净增 {rent_by_plan if rent_by_plan>0 else 0:,.0f} 元/月。"
+                f"B114 的 -20% 未体现在固租列的 21.00 上（详见注8），若落实为 16.80，则月租再减 {b114_give:,.0f} 元、"
+                f"年化减收 {b114_give*12:,.0f} 元。"),
+        ("注7", "C119（CHARLES&KEITH）在销售月报中查无此店数据，无法评估经营表现。该铺位 2027-09-05 到期、计划一次签 3 年（本批最长），"
+                "建议签约前务必补充销售数据核查，避免在无经营依据的情况下锁定 3 年租期与 18.5 元/㎡/日的固租水平。"),
+        ("注8", "【须与招调方核实】B114 招调表「固租 21 元/㎡/日」与「租金同比 -20%」自相矛盾：现行固租即为 21.00，"
+                "若维持 21.00 则同比为 0%；若确实让租 20% 则应为 16.80。两种情形月租差 3.58 万元、年化差 43 万元，"
+                "是本批最大的不确定性。本表按招调表原值 21.00 录入，请核实后再定稿。"),
+    ]
+    for i, (k, v) in enumerate(notes):
+        row = n + i
+        ws.cell(row=row, column=1, value=k).font = Font(name="微软雅黑", size=9, bold=True, color="C00000")
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=ncol)
+        cell = ws.cell(row=row, column=2, value=v)
+        cell.font = Font(name="微软雅黑", size=9, color="404040")
+        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        ws.row_dimensions[row].height = 30
+
+    ws.freeze_panes = "C5"
+    ws.sheet_view.zoomScale = 90
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+    out = os.path.join(OUT_DIR, "沈阳大悦城-2027年到期战略品牌招调简表.xlsx")
+    wb.save(out)
+
+    # ===== 控制台输出校验 =====
+    print("saved:", out)
+    print()
+    head = (f"{'铺位':<10}{'品牌':<15}{'面积':>9}{'到期':>12}{'现日租':>8}{'新月租':>12}"
+            f"{'25月均':>11}{'26月均':>11}{'同比':>9}{'租售比':>8}{'计划租售比':>10}{'抽成/固租':>10}")
+    print(head)
+    for d in rows:
+        f = lambda v, n=0: (f"{v:,.{n}f}" if v is not None else "—")
+        yoy = f"{d['yoy']*100:.1f}%" if d["yoy"] is not None else "—"
+        cr = f"{d['cr_cur']*100:.1f}%" if d["cr_cur"] else "—"
+        crn = f"{d['cr_new']*100:.1f}%" if d["cr_new"] else "—"
+        pr = f"{d['抽成固租比']*100:.1f}%" if d["抽成固租比"] else "—"
+        print(f"{d['unit']:<10}{d['plan']['原品牌']:<15}{d['area']:>9,.2f}"
+              f"{str(d['L'].get('最终到期')):>12}{f(d['当前日租'],2):>8}"
+              f"{f(d['当前月租']):>12}{f(d['m25']):>11}{f(d['m26']):>11}"
+              f"{yoy:>9}{cr:>8}{crn:>10}{pr:>10}")
+    print()
+    cur_rent = sum(d["当前月租"] for d in rows)
+    new_rent = sum(d["计划月租"] for d in rows)
+    print(f"面积合计 {ta:,.2f}㎡")
+    print(f"现行月租合计 {cur_rent:,.0f} 元　计划月租合计 {new_rent:,.0f} 元　"
+          f"差 {new_rent-cur_rent:+,.0f} 元/月（年化 {(new_rent-cur_rent)*12:+,.0f} 元）")
+
+
+if __name__ == "__main__":
+    main()
