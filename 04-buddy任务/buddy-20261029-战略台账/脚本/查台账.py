@@ -204,9 +204,17 @@ def main():
     ap.add_argument("--月数", type=int, default=12)
     ap.add_argument("--年份", type=int, default=0, help="按最终到期年份筛选，如 --年份 2027")
     ap.add_argument("--仅战略", action="store_true", help="只看战略品牌")
-    ap.add_argument("--源文件", default=os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "源数据", "运动男装合同台账1029.xlsx"))
+    # 默认取「源数据」目录里最新的 xlsx（新版 BI 导出落地后无需改代码）
+    _src_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "源数据")
+    _default_src = ""
+    if os.path.isdir(_src_dir):
+        _cands = sorted(
+            (f for f in os.listdir(_src_dir) if f.lower().endswith((".xlsx", ".xlsm"))),
+            key=lambda f: os.path.getmtime(os.path.join(_src_dir, f)), reverse=True)
+        if _cands:
+            _default_src = os.path.join(_src_dir, _cands[0])
+    ap.add_argument("--源文件", default=_default_src)
     args = ap.parse_args()
 
     data = build_all(args.源文件)

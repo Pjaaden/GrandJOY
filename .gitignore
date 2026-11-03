@@ -19,3 +19,10 @@ node_modules/
 
 # TRAE HTML 分享缓存（不入库）
 .trae-html-share-packages/
+
+# 可再生的构建中间产物（不入库，交付物本身入库）
+_载荷/
+_build/
+_probe/
+_对比/
+shots/
