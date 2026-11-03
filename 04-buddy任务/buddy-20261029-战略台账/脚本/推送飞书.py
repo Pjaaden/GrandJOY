@@ -222,13 +222,47 @@ def main():
         # 所以先查工作簿结构，只清真实存在的子表。
         info = run([LARK_BIN, "sheets", "+workbook-info", "--as", "user",
                     "--url", f"https://my.feishu.cn/sheets/{args.表格token}"])
-        exists = {s.get("sheet_name") for s in (info.get("data") or {}).get("sheets", [])}
+        sheets = (info.get("data") or {}).get("sheets", []) or []
+        exists = {s.get("sheet_name") for s in sheets}
+
+        # ⚠ 必须先删掉各子表上的筛选器（2026-11-03 修复）
+        # 原因：子表上若残留筛选（filtered_out_rows_count > 0），
+        # 被筛掉的行 +cells-batch-clear 会「返回 ok 但实际不清空」，
+        # 导致上一版的旧值残留在新一版应为空的单元格里（如旧租金被写到新合同行上）。
+        # 症状：本地 xlsx 与飞书逐行比对，租金/面积出现几十条对不上的残留。
+        # 修复：写数据前先 +filter-delete 清掉筛选器，再清空、写入。
+        for s in sheets:
+            name = s.get("sheet_name")
+            if not name:
+                continue
+            fl = run([LARK_BIN, "sheets", "+filter-list", "--as", "user",
+                      "--url", f"https://my.feishu.cn/sheets/{args.表格token}",
+                      "--sheet-name", name])
+            fsheets = (fl.get("data") or {}).get("sheets") or []
+            has_filter = any((x.get("filters") or []) for x in fsheets)
+            if has_filter:
+                run([LARK_BIN, "sheets", "+filter-delete", "--as", "user",
+                     "--url", f"https://my.feishu.cn/sheets/{args.表格token}",
+                     "--sheet-name", name, "--yes"])
+                print(f"[筛选器] 已删除残留筛选: {name}")
+
         ranges = [f"{n}!{r}" for n, r in CLEAR_RANGES.items() if n in exists]
         if ranges:
             clr = run([LARK_BIN, "sheets", "+cells-batch-clear", "--as", "user",
                        "--url", f"https://my.feishu.cn/sheets/{args.表格token}",
                        "--ranges", json.dumps(ranges, ensure_ascii=False), "--yes"])
             print("[清空旧数据]", "OK" if clr.get("ok") else json.dumps(clr, ensure_ascii=False)[:200])
+            # 清空后抽查一格，确认真的清掉了（clear 会「返回 ok 但不清」）
+            probe = run([LARK_BIN, "sheets", "+cells-get", "--as", "user",
+                         "--url", f"https://my.feishu.cn/sheets/{args.表格token}",
+                         "--sheet-name", "合同台账明细", "--range", "J2:J2"])
+            pv = (((probe.get("data") or {}).get("ranges") or [{}])[0]
+                  .get("cells") or [[{}]])
+            v = (pv[0][0] if pv and pv[0] else {}).get("value")
+            if isinstance(v, dict):
+                v = v.get("value")
+            if v not in (None, ""):
+                print(f"[警告] 清空后 J2 仍有值 {v!r}，可能存在筛选器或写入异常，请人工核查")
 
         cmd = [
             LARK_BIN, "sheets", "+table-put", "--as", "user",
