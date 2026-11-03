@@ -52,10 +52,25 @@ def main():
 
     url = f"https://my.feishu.cn/sheets/{args.表格token}"
 
+    # 确保「版本记录」子表存在（新建的表里没有这一页，直接写会静默落到错误行号）
+    info = run([LARK_BIN, "sheets", "+workbook-info", "--as", "user", "--url", url])
+    names = [s.get("sheet_name") for s in (info.get("data") or {}).get("sheets", [])]
+    if "版本记录" not in names:
+        mk = run([LARK_BIN, "sheets", "+sheet-create", "--as", "user", "--url", url,
+                  "--title", "版本记录", "--col-count", "20", "--row-count", "200"])
+        print(f"[建页] 版本记录子表已创建: {'OK' if mk.get('ok') else mk}")
+        # 顺手写表头
+        head = [[{"value": h} for h in VERSION_HEADERS]]
+        run([LARK_BIN, "sheets", "+cells-set", "--as", "user", "--url", url, "--writes", "-"],
+            stdin_data=json.dumps(
+                [{"sheet_name": "版本记录", "range": "A1:J1", "cells": head}], ensure_ascii=False))
+
     # 读现有版本记录，算出末行
     res = run([LARK_BIN, "sheets", "+csv-get", "--as", "user", "--url", url,
                "--sheet-name", "版本记录", "--range", "A1:J300"])
     csv_text = (res.get("data", {}) or {}).get("annotated_csv", "")
+    if not res.get("ok"):
+        print(f"[警告] 读版本记录失败: {str(res)[:200]}")
     last_row = 0
     for line in csv_text.splitlines():
         if line.startswith("[row="):
@@ -69,12 +84,23 @@ def main():
         print(f"[跳过] 数据版本 {v['数据版本']} 已有记录，不重复追加")
         return
 
-    target = last_row + 1
-    cells = [[{"value": v.get(h)} for h in VERSION_HEADERS]]
-    payload = [{"sheet_name": "版本记录", "range": f"A{target}:J{target}", "cells": cells}]
+    # 有表头则从第 2 行起；空表则连表头一起补
+    if last_row == 0:
+        target = 1
+        cells = [[{"value": h} for h in VERSION_HEADERS],
+                 [{"value": v.get(h)} for h in VERSION_HEADERS]]
+        rng = f"A{target}:J{target + 1}"
+    else:
+        target = last_row + 1
+        cells = [[{"value": v.get(h)} for h in VERSION_HEADERS]]
+        rng = f"A{target}:J{target}"
+    payload = [{"sheet_name": "版本记录", "range": rng, "cells": cells}]
     out = run([LARK_BIN, "sheets", "+cells-set", "--as", "user", "--url", url, "--writes", "-"],
               stdin_data=json.dumps(payload, ensure_ascii=False))
-    print(f"[OK] 版本记录已追加至第 {target} 行:", json.dumps(out, ensure_ascii=False)[:200])
+    if not out.get("ok"):
+        print(f"[失败] 版本记录写入失败: {str(out)[:300]}")
+        return
+    print(f"[OK] 版本记录已追加至第 {target} 行")
 
 
 if __name__ == "__main__":

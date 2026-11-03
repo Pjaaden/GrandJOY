@@ -26,7 +26,9 @@ if [ ! -x "$PY" ]; then
 fi
 
 # 飞书目标表（我的空间 / 大悦商业 / 战略台账）
-SHEET_TOKEN="JDKGs49LKhZRL9ts7mscg14inbg"
+# 2026-11-03 换表：旧表 JDKGs49LKhZRL9ts7mscg14inbg 被过重公式拖垮锁死（40400 record not found），
+# 数据已完整重建到新表 OLsUs8rXChtWpWtQNKDchXXQn8d（9 子表 / 937 明细 / 275 合同 / 50 品牌）。
+SHEET_TOKEN="OLsUs8rXChtWpWtQNKDchXXQn8d"
 SHEET_URL="https://my.feishu.cn/sheets/${SHEET_TOKEN}"
 
 echo "==========================================================="
@@ -60,10 +62,11 @@ echo ""
 echo "[3/5] 重建台账看板..."
 "$PY" "$SCRIPT_DIR/加看板.py" --表格token "$SHEET_TOKEN" --源文件 "$SRC" || exit 1
 
-# 6. 品牌合同查询页（静态快照 + 公式筛选）
+# 6. 品牌合同查询页（**独立表**，与主台账物理隔离）
 echo ""
-echo "[4/5] 构建品牌合同查询页..."
-"$PY" "$SCRIPT_DIR/加品牌查询页.py" --表格token "$SHEET_TOKEN" --源文件 "$SRC" || echo "  (品牌查询页构建失败，可手工重跑)"
+echo "[4/5] 构建品牌合同查询页（独立表）..."
+"$PY" "$SCRIPT_DIR/加品牌查询页.py" --表格token "$SHEET_TOKEN" --源文件 "$SRC" \
+  || echo "  (品牌查询页构建失败，可手工重跑)"
 
 # 7. 条件格式 + 子表顺序
 echo ""

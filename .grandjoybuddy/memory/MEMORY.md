@@ -81,4 +81,31 @@
 - **清空只清内容不清格式**：列数变化时旧列残留日期格式会让新写入的整数显示成 1900-01-01 → 写入时必须**逐列显式声明 number_format**
 - 表格数据写入用 `+table-put --sheets` typed 协议保类型（日期/金额/百分比）
 - 条件格式用 `+cond-format-create --rule-type expression --ranges '["A2:P500"]' --properties '{"style":{"back_color":"#FFE3E3"},"attrs":[{"formula":["=$A2=\"🔴 90天内到期\""]}]}'`
+- `+csv-get` 的 `--include-row-prefix` 是**布尔开关**，要写成 `--include-row-prefix=false`；
+  写成 `--include-row-prefix false`（空格）会报 "positional arguments are not supported"
+- `+cells-get` 要**同时**写 `--include value --include formula` 才看得到公式，否则只返回计算值
+  （公式一旦被误写成静态值，只读 value 会误以为「显示 0」是数据问题）
+- 读到的 `annotated_csv` 里逗号可能被引号包裹（金额 `"3,702,342.00"`），
+  逐行 `.split(',')` 会错位 → 必须用 `csv.reader`
+- 明细表真实列名是 `单位日租金(元/平方米/日)`、`签约面积`，**不是** `日租金`、`签约面积(㎡)`
+
+## 飞书表被公式拖垮的血案（2026-11-03，重要）
+- **公式页绝不放进主台账**。937 行明细上挂 300 行 × 20 列跨表公式，
+  一次重算触碰约 **1057 万**单元格 → 服务端重算队列积压，
+  `workbook-info` / `csv-get` / `sheet-delete` / `cells-set` **全部返回 40400 record not found**，
+  连删子表都失败，锁死约 1 小时。查询页必须独立成表（`EKkfsYBx5hqi4utEiKUcsbHQnmb`）
+- **锁死时唯一救法**：`lark-cli drive +copy --token <表token> --type sheet`
+  复制走文件层、不触发重算，能拿到完整数据
+- 锁表期间会**时好时坏**（偶尔放行一次又立刻锁上），且读到的可能是**旧版本**内容
+  （曾读到 `版本记录` 显示 20261028，而实际应是 20261102）→ 不能凭一次成功读取下结论
+- 恢复策略：**新建一张干净表重推**（`推送飞书.py` 不带 `--表格token`），比等锁表恢复可靠
+- 重推后必须补建 `版本记录` 子表（`推送飞书.py` 的 TYPED_SHEETS 排除了它，
+  `追加版本记录.py` 原本假设它已存在 → 会静默写到错误行号；已在脚本里加了自动建页）
+
+## 战略台账当前飞书位置（2026-11-03 起）
+- 主台账：`OLsUs8rXChtWpWtQNKDchXXQn8d`（9 子表），旧表 `JDKGs49...` 已弃用
+- 品牌查询工具：`EKkfsYBx5hqi4utEiKUcsbHQnmb`（独立表，「品牌合同查询」+「查询数据」快照）
+- 基准值（改代码后回归必测）：NIKE 22/12,378.00/5.59 | 李宁 18/6,145.32/11.06 |
+  NIKE+李宁 40/18,523.32/7.40 | GANT 2/363.54/35.13 | 波司登 15/5,066.57/11.66 |
+  FILA KIDS+特步儿童 10/1,768.31/6.14
 

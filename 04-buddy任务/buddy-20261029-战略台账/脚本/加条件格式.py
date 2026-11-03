@@ -87,10 +87,11 @@ def main():
         print(f"[条件格式] {SLOT_SHEET} {text}: {'OK' if res.get('ok') else res}")
 
     # 子表顺序：看板 → 明细 → 合同级 → 到期预警 → 铺位续约 → 区域业态 → 品牌 →
-    #           品牌合同查询 → 查询数据(快照) → 字段说明 → 版本记录
+    #           字段说明 → 版本记录
+    # 注：品牌合同查询页在**独立表**里（见 加品牌查询页.py），
+    #     不在本表，避免公式页的重算问题波及主台账。
     order = ["台账看板", "合同台账明细", "合同级汇总", ALERT_SHEET, SLOT_SHEET,
-             "区域业态汇总", "品牌汇总", "品牌合同查询", "查询数据",
-             "字段说明", "版本记录"]
+             "区域业态汇总", "品牌汇总", "字段说明", "版本记录"]
     info = run([LARK_BIN, "sheets", "+workbook-info", "--as", "user", "--url", url])
     names = [s.get("sheet_name") for s in (info.get("data") or {}).get("sheets", [])]
     for idx, want in enumerate(order):

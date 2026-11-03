@@ -176,14 +176,61 @@ def ensure_sheet(url, name, index=None, rows=30, cols=24):
                  "row_count": rows}
 
 
+def find_or_create_query_workbook(folder_token):
+    """品牌查询页**单独建一张表**，与主台账物理隔离。
+
+    为什么必须独立：公式页一旦出问题是会波及整张表的 ——
+    2026-11-03 就因为把查询页放进主台账，重算风暴把主台账锁死 40+ 分钟，
+    连删子表都失败。独立表即使公式再重，也只影响自己。
+    """
+    name = "品牌合同查询工具"
+    # 找同文件夹下已有的同名表
+    lst = run([LARK_BIN, "drive", "+list", "--as", "user",
+                "--folder-token", folder_token])
+    files = ((lst.get("data") or {}).get("files")
+             or (lst.get("data") or {}).get("items")
+             or (lst.get("data") or {}).get("list")
+             or [])
+    for f in files:
+        if f.get("name") == name and f.get("type") == "sheet":
+            tok = f.get("token")
+            if tok:
+                print(f"[OK] 复用已有查询工具表, token = {tok}")
+                return tok
+    # 没有就新建一张空表
+    res = run([LARK_BIN, "sheets", "+workbook-create", "--as", "user",
+               "--title", name, "--folder-token", folder_token])
+    if not res.get("ok"):
+        print("[ERR] 建查询工具表失败:", json.dumps(res, ensure_ascii=False)[:400])
+        return None
+    sp = (res.get("data") or {}).get("spreadsheet") or {}
+    tok = sp.get("spreadsheet_token")
+    print(f"[OK] 查询工具表已建, token = {tok}")
+    print(f"     {sp.get('url','')}")
+    return tok
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--表格token", required=True)
+    ap.add_argument("--表格token", required=True,
+                    help="主台账 token（查询页默认另建独立表，此参数仅用于定位源数据）")
+    ap.add_argument("--查询表token", default=None,
+                    help="查询工具表 token；不给则新建一张独立表")
+    ap.add_argument("--文件夹token", default="ZRbRfWrV7lMEKgdYWPocyboBngf",
+                    help="查询工具表存放文件夹（战略台账）")
     ap.add_argument("--源文件", default=os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "源数据", "运动男装合同台账1103.xlsx"))
     args = ap.parse_args()
-    url = f"https://my.feishu.cn/sheets/{args.表格token}"
+
+    # ── 定位查询工具表（独立于主台账，公式页出问题也不会波及台账）──
+    qtok = args.查询表token or find_or_create_query_workbook(args.文件夹token)
+    if not qtok:
+        print("[ERR] 没有可用的查询工具表，终止")
+        return
+    url = f"https://my.feishu.cn/sheets/{qtok}"
+    print(f"[目标] 查询工具表 {qtok}")
+    print(f"       {url}")
 
     data = build_all(args.源文件)
     _, meta = load_source(args.源文件)
@@ -229,6 +276,14 @@ def main():
     os.makedirs(payload_dir, exist_ok=True)
 
     # ── 1) 「查询数据」页：typed 静态快照 ──────────────────────────────
+    #    新建的表自带一个空白 Sheet1，删掉避免困惑
+    for s in ((run([LARK_BIN, "sheets", "+workbook-info", "--as", "user", "--url", url])
+               .get("data") or {}).get("sheets") or []):
+        if s.get("sheet_name") in ("Sheet1", "Sheet 1"):
+            run([LARK_BIN, "sheets", "+sheet-delete", "--as", "user", "--url", url,
+                 "--sheet-name", s["sheet_name"], "--yes"])
+            time.sleep(2)
+
     _, dinfo = ensure_sheet(url, DATA_SHEET, index=1, rows=20, cols=len(SNAP_H))
     if dinfo is None:
         return
@@ -488,6 +543,8 @@ def main():
     print(f"\n[OK] 「{QUERY_SHEET}」已生成：品牌 {len(brands)} 个 / 快照 {n_snap} 行 / "
           f"结果区 {N_RESULT} 行")
     print(f"     下拉 {SEL_CELL}（可多选）；统计条 第{STAT_ROW}行；表头 第{HDR_ROW}行")
+    print(f"     位置：{url}")
+    print(f"     ⚠ 查询页是**独立表**，公式页出重算问题也只影响这张表，不波及主台账")
 
 
 if __name__ == "__main__":
