@@ -40,10 +40,15 @@ def run(cmd, stdin_data=None):
     env = dict(os.environ)
     env["PATH"] = os.path.dirname(LARK_BIN) + os.pathsep + env.get("PATH", "")
     p = subprocess.run(cmd, env=env, input=stdin_data, capture_output=True, text=True)
-    try:
-        return json.loads(p.stdout.strip() or "{}")
-    except json.JSONDecodeError:
-        return {"raw": p.stdout, "stderr": p.stderr[-1200:]}
+    # ⚠ 飞书 CLI 出错时把 JSON 错误体写到 **stderr**、stdout 为空。两边都要试。
+    for blob in (p.stdout, p.stderr):
+        blob = (blob or "").strip()
+        if blob.startswith("{"):
+            try:
+                return json.loads(blob)
+            except json.JSONDecodeError:
+                continue
+    return {"ok": False, "raw": (p.stdout or "")[:300], "stderr": (p.stderr or "")[-800:]}
 
 
 def main():

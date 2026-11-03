@@ -120,10 +120,19 @@ def run(cmd, stdin_data=None, retries=4, cwd=None):
     for attempt in range(retries):
         p = subprocess.run(cmd, cwd=cwd, env=env, input=stdin_data,
                            capture_output=True, text=True)
-        try:
-            last = json.loads(p.stdout.strip() or "{}")
-        except json.JSONDecodeError:
-            last = {"raw": p.stdout, "stderr": p.stderr[-1500:]}
+        # ⚠ 飞书 CLI 出错时把 JSON 错误体写到 **stderr**、stdout 为空。
+        #    只解析 stdout 会拿到 {}，看不出真实错误码（40400 重试逻辑会因此失效）—— 两边都要试。
+        last = {}
+        for blob in (p.stdout, p.stderr):
+            blob = (blob or "").strip()
+            if blob.startswith("{"):
+                try:
+                    last = json.loads(blob)
+                    break
+                except json.JSONDecodeError:
+                    continue
+        if not last:
+            last = {"ok": False, "raw": (p.stdout or "")[:300], "stderr": (p.stderr or "")[-800:]}
         if last.get("ok"):
             return last
         msg = json.dumps(last, ensure_ascii=False)

@@ -78,6 +78,12 @@ echo ""
 echo "[追加] 版本记录..."
 "$PY" "$SCRIPT_DIR/追加版本记录.py" --表格token "$SHEET_TOKEN" --源文件 "$SRC" || echo "  (版本记录追加失败，可手工补)"
 
+# 9. 同步表格标题（把「数据版本 + 更新日期」写进文件名，便于一眼分辨新旧版）
+echo ""
+echo "[收尾] 同步表格标题..."
+"$PY" "$SCRIPT_DIR/同步标题.py" --表格token "$SHEET_TOKEN" --源文件 "$SRC" \
+  --名称 "全国运动男装战略品牌合同台账" || echo "  (标题同步失败，可手工改)"
+
 echo ""
 echo "✓ 更新完成"
 echo "  本地：$OUT_DIR"

@@ -83,6 +83,10 @@
 - 条件格式用 `+cond-format-create --rule-type expression --ranges '["A2:P500"]' --properties '{"style":{"back_color":"#FFE3E3"},"attrs":[{"formula":["=$A2=\"🔴 90天内到期\""]}]}'`
 - `+csv-get` 的 `--include-row-prefix` 是**布尔开关**，要写成 `--include-row-prefix=false`；
   写成 `--include-row-prefix false`（空格）会报 "positional arguments are not supported"
+- ⚠ **飞书 CLI 出错时把 JSON 错误体写到 stderr、stdout 为空** —— 只 `json.loads(p.stdout)` 会拿到 `{}`，
+  看不出真实错误码（40400 重试逻辑会因此失效）。**stdout 和 stderr 都要试解析**
+- ⚠ `drive +update-title` 在「标题与当前完全相同」时返回 **981001 internal error** —— 属于无变化的正常情况，
+  应按成功处理，否则每次幂等重跑都误报失败
 - `+cells-get` 要**同时**写 `--include value --include formula` 才看得到公式，否则只返回计算值
   （公式一旦被误写成静态值，只读 value 会误以为「显示 0」是数据问题）
 - 读到的 `annotated_csv` 里逗号可能被引号包裹（金额 `"3,702,342.00"`），
@@ -105,6 +109,8 @@
 ## 战略台账当前飞书位置（2026-11-03 起）
 - 主台账：`OLsUs8rXChtWpWtQNKDchXXQn8d`（9 子表），旧表 `JDKGs49...` 已弃用
 - 品牌查询工具：`EKkfsYBx5hqi4utEiKUcsbHQnmb`（独立表，「品牌合同查询」+「查询数据」快照）
+- **云端表格命名规则**：`<名称>_<数据版本>版_更新<YYYYMMDD>`（例：`全国运动男装战略品牌合同台账_20261102版_更新20261103`）
+  旧表统一加「【已废弃】」前缀。由 `脚本/同步标题.py` 在每次更新后自动写入
 - 基准值（改代码后回归必测）：NIKE 22/12,378.00/5.59 | 李宁 18/6,145.32/11.06 |
   NIKE+李宁 40/18,523.32/7.40 | GANT 2/363.54/35.13 | 波司登 15/5,066.57/11.66 |
   FILA KIDS+特步儿童 10/1,768.31/6.14

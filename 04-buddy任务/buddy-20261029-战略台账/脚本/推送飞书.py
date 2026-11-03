@@ -166,11 +166,19 @@ def run(cmd: list[str], cwd: str | None = None, stdin_data: str | None = None) -
         capture_output=True,
         text=True,
     )
-    out = proc.stdout.strip()
-    try:
-        parsed = json.loads(out) if out else {}
-    except json.JSONDecodeError:
-        parsed = {"raw": out}
+    # ⚠ 飞书 CLI 出错时把 JSON 错误体写到 **stderr**、stdout 为空 —— 两边都要试，
+    #    否则拿到的 parsed 会是空 dict，看不出真实错误码。
+    parsed = {}
+    for blob in (proc.stdout, proc.stderr):
+        blob = (blob or "").strip()
+        if blob.startswith("{"):
+            try:
+                parsed = json.loads(blob)
+                break
+            except json.JSONDecodeError:
+                continue
+    if not parsed:
+        parsed = {"ok": False, "raw": (proc.stdout or "")[:300]}
     if not parsed.get("ok", False):
         parsed["_stderr"] = proc.stderr[-2000:]
         parsed["_returncode"] = proc.returncode
