@@ -36,36 +36,51 @@ echo " 运动/男装战略品牌合同台账 · 更新"
 echo "==========================================================="
 
 # 1. 选定源文件
+#    可传多个（逗号分隔），用于「BI 按筛选条件分开导出」的多源合并
+#    例：./更新台账.sh 源数据/运动男装合同台账1103.xlsx,源数据/安踏儿童合同台账1104.xlsx
 SRC="${1:-}"
 if [ -z "$SRC" ]; then
   SRC=$(ls -1t "$SRC_DIR"/*.xlsx 2>/dev/null | head -1)
 fi
-if [ -z "$SRC" ] || [ ! -f "$SRC" ]; then
+if [ -z "$SRC" ]; then
   echo "✗ 未找到源文件。请把 BI 导出的 xlsx 放进："
   echo "  $SRC_DIR"
   exit 1
 fi
-echo "源文件：$SRC"
+# 逐个校验存在性
+IFS=',' read -ra _srcs <<< "$SRC"
+SRC_ARGS=()
+for _s in "${_srcs[@]}"; do
+  _s="${_s#"${_s%%[![:space:]]*}"}"; _s="${_s%"${_s##*[![:space:]]}"}"
+  if [ ! -f "$_s" ]; then
+    echo "✗ 源文件不存在：$_s"
+    exit 1
+  fi
+  SRC_ARGS+=(--源文件 "$_s")
+done
+SRC_N=$((${#SRC_ARGS[@]} / 2))
+echo "源文件（${SRC_N} 个）："
+for _s in "${_srcs[@]}"; do echo "  · $_s"; done
 
 # 2. 生成本地 Excel
 echo ""
 echo "[1/5] 生成本地 Excel 台账..."
-"$PY" "$SCRIPT_DIR/生成台账xlsx.py" --源文件 "$SRC" --说明 "定期更新" || exit 1
+"$PY" "$SCRIPT_DIR/生成台账xlsx.py" --源文件 "${SRC_ARGS[@]}" --说明 "定期更新" || exit 1
 
 # 3. 刷新飞书表（覆盖式）
 echo ""
 echo "[2/5] 刷新飞书表..."
-"$PY" "$SCRIPT_DIR/推送飞书.py" --源文件 "$SRC" --表格token "$SHEET_TOKEN" || exit 1
+"$PY" "$SCRIPT_DIR/推送飞书.py" --源文件 "${SRC_ARGS[@]}" --表格token "$SHEET_TOKEN" || exit 1
 
 # 4. 重建看板
 echo ""
 echo "[3/5] 重建台账看板..."
-"$PY" "$SCRIPT_DIR/加看板.py" --表格token "$SHEET_TOKEN" --源文件 "$SRC" || exit 1
+"$PY" "$SCRIPT_DIR/加看板.py" --表格token "$SHEET_TOKEN" --源文件 "${SRC_ARGS[@]}" || exit 1
 
 # 6. 品牌合同查询页（**独立表**，与主台账物理隔离）
 echo ""
 echo "[4/5] 构建品牌合同查询页（独立表）..."
-"$PY" "$SCRIPT_DIR/加品牌查询页.py" --表格token "$SHEET_TOKEN" --源文件 "$SRC" \
+"$PY" "$SCRIPT_DIR/加品牌查询页.py" --表格token "$SHEET_TOKEN" --源文件 "${SRC_ARGS[@]}" \
   || echo "  (品牌查询页构建失败，可手工重跑)"
 
 # 7. 条件格式 + 子表顺序
@@ -76,13 +91,18 @@ echo "[5/5] 配置条件格式与子表顺序..."
 # 8. 追加版本记录
 echo ""
 echo "[追加] 版本记录..."
-"$PY" "$SCRIPT_DIR/追加版本记录.py" --表格token "$SHEET_TOKEN" --源文件 "$SRC" || echo "  (版本记录追加失败，可手工补)"
+"$PY" "$SCRIPT_DIR/追加版本记录.py" --表格token "$SHEET_TOKEN" --源文件 "${SRC_ARGS[@]}" || echo "  (版本记录追加失败，可手工补)"
 
 # 9. 同步表格标题（把「数据版本 + 更新日期」写进文件名，便于一眼分辨新旧版）
 echo ""
 echo "[收尾] 同步表格标题..."
-"$PY" "$SCRIPT_DIR/同步标题.py" --表格token "$SHEET_TOKEN" --源文件 "$SRC" \
+"$PY" "$SCRIPT_DIR/同步标题.py" --表格token "$SHEET_TOKEN" --源文件 "${SRC_ARGS[@]}" \
   --名称 "全国运动男装战略品牌合同台账" || echo "  (标题同步失败，可手工改)"
+
+# 10. 同步品牌查询工具表的标题（独立表，标题要单独同步）
+QUERY_TOKEN="EKkfsYBx5hqi4utEiKUcsbHQnmb"
+"$PY" "$SCRIPT_DIR/同步标题.py" --表格token "$QUERY_TOKEN" --源文件 "${SRC_ARGS[@]}" \
+  --名称 "品牌合同查询工具" || echo "  (查询工具标题同步失败，可手工改)"
 
 echo ""
 echo "✓ 更新完成"

@@ -47,12 +47,14 @@ def run(cmd, stdin_data=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--表格token", required=True)
-    ap.add_argument("--源文件", required=True)
+    ap.add_argument("--源文件", required=True, action="append",
+                    help="BI 导出的合同台账 xlsx；可多次传参或用逗号分隔（多源合并）")
     ap.add_argument("--名称", default="全国运动男装战略品牌合同台账", help="标题前缀")
     ap.add_argument("--类型", default="sheet", help="sheet|docx|base")
     args = ap.parse_args()
 
-    data = build_all(args.源文件)
+    from 台账核心 import split_source_args
+    data = build_all(split_source_args(args.源文件))
     version = str(data["版本记录"][0]["数据版本"])
     today = dt.date.today().strftime("%Y%m%d")
     title = f"{args.名称}_{version}版_更新{today}"

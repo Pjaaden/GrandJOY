@@ -241,8 +241,10 @@ def main():
     print(f"[目标] 查询工具表 {qtok}")
     print(f"       {url}")
 
-    data = build_all(args.源文件)
-    _, meta = load_source(args.源文件)
+    from 台账核心 import load_sources, split_source_args
+    srcs = split_source_args(args.源文件)
+    data = build_all(srcs)
+    _, meta = load_sources(srcs)
     detail = data["合同台账明细"]
 
     # 合同最终到期日 = 同合同编号下期次到期日最大值（Python 预算 → 静态值）
@@ -515,19 +517,24 @@ def main():
             w = 150
         widths.append({"range": f"{col_letter(i)}:{col_letter(i)}",
                        "type": "pixel", "size": w})
+    # ⚠ +styles-put 的目标表名要写在 --styles 的 `name` 字段里，
+    #   它**不接受** --sheet-name（会报 unknown flag）。
     styles = {
-        "cell_styles": [
-            {"range": f"A{HDR_ROW}:{col_letter(len(RESULT_COLS))}{HDR_ROW}",
-             "font_weight": "bold", "background_color": "#1F3864",
-             "font_color": "#FFFFFF", "horizontal_alignment": "center",
-             "vertical_alignment": "middle"},
-        ],
-        "row_sizes": [{"range": f"{HDR_ROW}:{HDR_ROW}", "type": "pixel", "size": 28}],
-        "col_sizes": widths,
-        "freeze": {"rows": HDR_ROW, "cols": 0},
+        "styles": [{
+            "name": QUERY_SHEET,
+            "cell_styles": [
+                {"range": f"A{HDR_ROW}:{col_letter(len(RESULT_COLS))}{HDR_ROW}",
+                 "font_weight": "bold", "background_color": "#1F3864",
+                 "font_color": "#FFFFFF", "horizontal_alignment": "center",
+                 "vertical_alignment": "middle"},
+            ],
+            "row_sizes": [{"range": f"{HDR_ROW}:{HDR_ROW}", "type": "pixel", "size": 28}],
+            "col_sizes": widths,
+            "freeze": {"rows": HDR_ROW, "cols": 0},
+        }],
     }
     res = run([LARK_BIN, "sheets", "+styles-put", "--as", "user", "--url", url,
-               "--sheet-name", QUERY_SHEET, "--styles", json.dumps(styles, ensure_ascii=False)])
+               "--styles", json.dumps(styles, ensure_ascii=False)])
     print("[版式]", "OK" if res.get("ok") else json.dumps(res, ensure_ascii=False)[:200])
 
     res = run([LARK_BIN, "sheets", "+dim-hide", "--as", "user", "--url", url,

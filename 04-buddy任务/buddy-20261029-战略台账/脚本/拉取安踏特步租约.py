@@ -28,7 +28,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from 台账核心 import (  # noqa: E402
-    build_contract, build_detail, load_source, _date,
+    build_contract, build_detail, load_sources, split_source_args, _date,
 )
 
 import openpyxl  # noqa: E402
@@ -36,11 +36,13 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side  # noqa: 
 from openpyxl.utils import get_column_letter  # noqa: E402
 
 # ── 品牌范围定义 ────────────────────────────────────────────────────────────
-# 安踏体系：台账里是 3 个独立品牌名（SUPERSTORE / GUANJUN 是独立店型，各自有独立铺位）
-ANTA_BRANDS = {"ANTA", "ANTA SUPERSTORE", "ANTA  GUANJUN"}
+# 安踏体系：台账里是 4 个独立品牌名
+#   （SUPERSTORE / GUANJUN 是独立店型，各自有独立铺位；安踏儿童 2026-11-05 补充导出后并入）
+ANTA_BRANDS = {"ANTA", "ANTA SUPERSTORE", "ANTA  GUANJUN", "安踏儿童"}
 XTEP_BRANDS = {"特步", "特步儿童"}
-# ANTA KIDS 在当前台账中不存在，单独登记以便如实标注缺口
-MISSING_BRANDS = {"ANTA KIDS": "安踏儿童"}
+# 注：2026-11-05 起「安踏儿童」已由 BI 单独导出并入总表（源数据/安踏儿童合同台账1104.xlsx），
+#     此前台账缺该品牌 —— 不再登记为缺失。
+MISSING_BRANDS: dict[str, str] = {}
 
 # 品牌 → 体系 / 店型
 def brand_meta(b: str, shop_name: str = "") -> tuple[str, str]:
@@ -62,6 +64,9 @@ def brand_meta(b: str, shop_name: str = "") -> tuple[str, str]:
         return "安踏体系", "GUANJUN 冠军店"
     if "SUPERSTORE" in bu:
         return "安踏体系", "SUPERSTORE 超级店"
+    if b == "安踏儿童":
+        # 店铺名称有「安踏儿童」「ANTA kids」「antakids」「3F-33 ANTA kids」多种写法
+        return "安踏体系", "儿童店"
     if b == "特步":
         return "特步体系", "标准店"
     if b == "特步儿童":
@@ -125,13 +130,18 @@ def finish(ws, headers, rows, num_cols=()):
 def main():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap = argparse.ArgumentParser()
-    ap.add_argument("--源文件", default=os.path.join(here, "源数据", "运动男装合同台账1103.xlsx"))
+    ap.add_argument("--源文件", default=os.path.join(
+        here, "源数据", "运动男装合同台账1103.xlsx") +
+        "," + os.path.join(here, "源数据", "安踏儿童合同台账1104.xlsx"),
+        action="append",
+        help="BI 导出 xlsx；可多次传参或用逗号分隔（多源合并）")
     ap.add_argument("--输出", default=None)
     ap.add_argument("--截至", default=None, help="判断在租的基准日，默认今天")
     args = ap.parse_args()
 
     today = dt.date.fromisoformat(args.截至) if args.截至 else dt.date.today()
-    src, meta = load_source(args.源文件)
+    srcs = split_source_args(args.源文件)
+    src, meta = load_sources(srcs)
     detail_all = build_detail(src)
     contract_all = build_contract(detail_all, src)
 

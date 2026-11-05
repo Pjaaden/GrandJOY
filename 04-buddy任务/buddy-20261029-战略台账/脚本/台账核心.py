@@ -273,6 +273,83 @@ def load_source(path: str) -> tuple[list[dict], dict]:
     return data, meta
 
 
+def split_source_args(value) -> list[str]:
+    """把命令行传入的「源文件」参数解析成路径列表。
+
+    支持三种写法（逗号分隔 / 多次传参 / 单个路径）：
+      --源文件 a.xlsx
+      --源文件 a.xlsx,b.xlsx
+      --源文件 a.xlsx --源文件 b.xlsx
+    多源场景见 load_sources。
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        items = [value]
+    out: list[str] = []
+    for it in items:
+        for p in str(it).split(","):
+            p = p.strip()
+            if p:
+                out.append(p)
+    return out
+
+
+def load_sources(paths: list[str]) -> tuple[list[dict], dict]:
+    """读取**多个** BI 导出的合同台账并合并，返回 (合并后的原始行, 源元信息)。
+
+    为什么要多源合并（2026-11-05 安踏儿童补充）：
+      BI 导出是**按筛选条件**导出的，不同品类/业态可能来自不同文件。
+      例：主台账「运动+男装」导出里没有儿童类 → 安踏儿童需另导一份再并进来。
+      合并时必须守住三条：
+        1. **同合同编号去重**（同一份合同可能在多个文件里出现，以先出现的为准）
+        2. **统计日期取最大值**（最新那版的口径为准），但要记录每个文件各自的日期
+        3. **列结构以第一个文件为准**；后到的文件若多出列，缺的补 None（不丢字段）
+
+    ⚠ 注意：合并后的总行数不等于「战略品牌数」或「合同数」——
+      明细粒度是合同期次，同一合同多期次会重复出现。
+    """
+    all_rows: list[dict] = []
+    seen_key: set[tuple] = set()
+    files_meta: list[dict] = []
+    dup_skipped = 0
+
+    for path in paths:
+        data, meta = load_source(path)
+        kept = 0
+        for r in data:
+            # ⚠ 去重键必须是「合同编号 + 合同期间」，**不能只用合同编号** ——
+            #   同一份合同会有多个期次（续约分段），合同编号相同是正常的。
+            #   只按合同编号去重会把同一合同的其它期次整段丢掉（实测丢 688 行）。
+            cid = str(r.get("合同编号") or "").strip()
+            ph = str(r.get("合同期间") or "").strip()
+            key = (cid, ph) if cid else None
+            if key is not None:
+                if key in seen_key:
+                    dup_skipped += 1
+                    continue
+                seen_key.add(key)
+            all_rows.append(r)
+            kept += 1
+        meta["kept"] = kept
+        meta["path"] = path
+        files_meta.append(meta)
+
+    # 统计日期取各文件中的最大值 = 最新口径
+    all_dates = [m["stat_date"] for m in files_meta if m.get("stat_date")]
+    merged_meta = {
+        "sheet": files_meta[0]["sheet"] if files_meta else "",
+        "rows": len(all_rows),
+        "stat_date": max(all_dates) if all_dates else "",
+        "file": " + ".join(m["file"] for m in files_meta),
+        "files": files_meta,
+        "dup_skipped": dup_skipped,
+    }
+    return all_rows, merged_meta
+
+
 # ── 明细台账构建 ────────────────────────────────────────────────────────────
 def build_detail(src: list[dict]) -> list[dict]:
     """把原始行标准化为明细台账行（含 17 核心列 + 扩展列 + 校验列）。"""
@@ -792,9 +869,16 @@ def build_version(meta: dict, detail: list[dict], contract: list[dict], note: st
 
 
 # ── 主入口 ──────────────────────────────────────────────────────────────────
-def build_all(path: str, note: str = "") -> dict[str, list[dict]]:
-    """一次性产出全部子表数据。"""
-    src, meta = load_source(path)
+def build_all(path, note: str = "") -> dict[str, list[dict]]:
+    """一次性产出全部子表数据。
+
+    path 可以是单个文件路径，也可以是**文件列表**（多源合并，见 load_sources）。
+    多源场景用于「BI 按筛选条件分开导出」的情况，例如主台账 + 安踏儿童补充导出。
+    """
+    if isinstance(path, (list, tuple)):
+        src, meta = load_sources(list(path))
+    else:
+        src, meta = load_source(path)
     detail = build_detail(src)
     contract = build_contract(detail, src)
     region = build_region(contract, detail)

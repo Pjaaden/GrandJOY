@@ -48,7 +48,8 @@ def main():
         "源数据", "运动男装合同台账1029.xlsx"))
     args = ap.parse_args()
 
-    data = build_all(args.源文件)
+    from 台账核心 import split_source_args
+    data = build_all(split_source_args(args.源文件))
     contract = data["合同级汇总"]
     brand = data["品牌汇总"]
     detail = data["合同台账明细"]

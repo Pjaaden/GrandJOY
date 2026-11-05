@@ -21,7 +21,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from 台账核心 import SHEET_SPECS, build_all, load_source  # noqa: E402
+from 台账核心 import SHEET_SPECS, build_all, load_sources, split_source_args  # noqa: E402
 
 LARK_BIN = os.path.expanduser(
     "~/.grandjoybuddy/binaries/node/workspace/node_modules/.bin/lark-cli"
@@ -187,14 +187,16 @@ def run(cmd: list[str], cwd: str | None = None, stdin_data: str | None = None) -
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--源文件", required=True)
+    ap.add_argument("--源文件", required=True, action="append",
+                    help="BI 导出的合同台账 xlsx；可多次传参或用逗号分隔（多源合并）")
     ap.add_argument("--表格token", default=None, help="已有飞书表 token（刷新用）")
     ap.add_argument("--仅导出载荷", action="store_true")
     ap.add_argument("--载荷目录", default=None)
     args = ap.parse_args()
 
-    data = build_all(args.源文件)
-    _, meta = load_source(args.源文件)
+    srcs = split_source_args(args.源文件)
+    data = build_all(srcs)
+    _, meta = load_sources(srcs)
 
     sheets_payload = {"sheets": [to_typed(n, data[n]) for n in TYPED_SHEETS]}
     styles_payload = {"styles": [build_styles(n, SHEET_SPECS[n], len(data[n])) for n in TYPED_SHEETS]}

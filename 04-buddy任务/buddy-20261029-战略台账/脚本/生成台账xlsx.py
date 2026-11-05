@@ -254,14 +254,16 @@ def highlight_checks(wb):
 
 def main():
     ap = argparse.ArgumentParser(description="生成运动/男装战略品牌合同台账")
-    ap.add_argument("--源文件", required=True, help="BI 导出的合同台账 xlsx")
+    ap.add_argument("--源文件", required=True, action="append",
+                    help="BI 导出的合同台账 xlsx；可多次传参或用逗号分隔（多源合并）")
     ap.add_argument("--输出", default=None, help="输出 xlsx 路径")
     ap.add_argument("--说明", default="", help="版本备注")
     args = ap.parse_args()
 
-    data = build_all(args.源文件, note=args.说明)
-    from 台账核心 import load_source
-    _, meta = load_source(args.源文件)
+    from 台账核心 import load_sources, split_source_args
+    srcs = split_source_args(args.源文件)
+    data = build_all(srcs, note=args.说明)
+    _, meta = load_sources(srcs)
 
     wb = openpyxl.Workbook()
     wb.remove(wb.active)

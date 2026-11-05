@@ -27,7 +27,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from 台账核心 import build_all, load_source  # noqa: E402
+from 台账核心 import build_all, load_sources, split_source_args  # noqa: E402
 
 # 品牌集团归属（与 查台账.py 保持一致）
 GROUPS = {
@@ -114,8 +114,9 @@ def main():
     brands = expand(names)
     today = dt.date.today()
 
-    data = build_all(args.源文件)
-    _, meta = load_source(args.源文件)
+    srcs = split_source_args(args.源文件)
+    data = build_all(srcs)
+    _, meta = load_sources(srcs)
     detail = data["合同台账明细"]
 
     # 合同最终到期日 = 同合同编号下期次到期日最大值

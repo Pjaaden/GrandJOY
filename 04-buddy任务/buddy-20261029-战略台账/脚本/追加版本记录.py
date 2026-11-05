@@ -47,11 +47,13 @@ def run(cmd, stdin_data=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--表格token", required=True)
-    ap.add_argument("--源文件", required=True)
+    ap.add_argument("--源文件", required=True, action="append",
+                    help="BI 导出的合同台账 xlsx；可多次传参或用逗号分隔（多源合并）")
     ap.add_argument("--备注", default="定期更新")
     args = ap.parse_args()
 
-    data = build_all(args.源文件)
+    from 台账核心 import split_source_args
+    data = build_all(split_source_args(args.源文件))
     v = dict(data["版本记录"][0])
     v["备注"] = args.备注
     v["生成时间"] = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
